@@ -56,6 +56,20 @@ export default function TrackingApp() {
   // Cooldown & De-dupe refs
   const lastScannedCode = useRef<string>('');
   const lastScannedTime = useRef<number>(0);
+  
+  // Refs to allow camera handleScan to see latest state without re-rendering scanner
+  const scanModeRef = useRef(scanMode);
+  scanModeRef.current = scanMode;
+  const locationTypeRef = useRef(locationType);
+  locationTypeRef.current = locationType;
+  const isScanningCartRef = useRef(isScanningCart);
+  isScanningCartRef.current = isScanningCart;
+  const tempCartIDRef = useRef(tempCartID);
+  tempCartIDRef.current = tempCartID;
+  const stationRef = useRef(station);
+  stationRef.current = station;
+  const scannedCodesRef = useRef(scannedCodes);
+  scannedCodesRef.current = scannedCodes;
 
   useEffect(() => {
     const savedTram = localStorage.getItem('track_tram');
@@ -158,42 +172,48 @@ export default function TrackingApp() {
     
     lastScannedCode.current = cleanText;
     lastScannedTime.current = now;
-    playSound('ok');
 
-    if (scanMode === 'MAP_CART_TO_LOC') {
+    if (scanModeRef.current === 'MAP_CART_TO_LOC') {
       const formatted = formatOrderCode(cleanText);
-      if (isScanningCart) {
+      if (isScanningCartRef.current) {
         if (/^XE - \d+$/.test(formatted)) {
+          playSound('ok');
           setTempCartID(formatted);
           setIsScanningCart(false);
-          lastScannedCode.current = ''; // Reset để cho phép quét vị trí ngay sau đó
+          lastScannedCode.current = ''; 
         } else {
+          playSound('ng');
           alert("Vui lòng quét mã XE (Định dạng: XE - ***)");
         }
       } else {
-        if (formatted !== tempCartID) {
+        if (formatted !== tempCartIDRef.current) {
+          playSound('ok');
           setTempLocID(formatted);
           stopCamera();
         }
       }
-    } else if (scanMode === 'WORK_LOCATION') {
+    } else if (scanModeRef.current === 'WORK_LOCATION') {
       const formatted = formatOrderCode(cleanText);
-      if (locationType === 'CART') {
+      if (locationTypeRef.current === 'CART') {
         if (/^XE - \d+$/.test(formatted)) {
+          playSound('ok');
           setVitri(formatted);
         } else {
+          playSound('ng');
           alert("Ở chế độ Đóng lên xe, vị trí phải có định dạng XE - ***");
         }
       } else {
+        playSound('ok');
         setVitri(formatted);
       }
-    } else if (scanMode === 'WORK_ORDER') {
+    } else if (scanModeRef.current === 'WORK_ORDER') {
       const rawCodes = rawText.split('|');
       const processedCodes = rawCodes
         .map(c => formatOrderCode(c))
-        .filter(c => isValidCode(c) && !scannedCodes.includes(c));
+        .filter(c => isValidCode(c) && !scannedCodesRef.current.includes(c));
         
       if (processedCodes.length > 0) {
+        playSound('ok');
         setScannedCodes(prev => [...processedCodes, ...prev]);
       }
     }
