@@ -146,10 +146,10 @@ export async function lookupOrder(maDonInput: string) {
       if (match) {
         const maXeScan = match[0];
         const cartInfo = await db.select().from(trackingCarts).where(eq(trackingCarts.code, maXeScan)).get();
-        if (cartInfo) {
-          // If cart is at a specific location, it means it's at Leanline (Station 4)
-          tramDisplay = TRAM.T4;
-          vitriDisplay += ` ➔ Đang ở: ${cartInfo.location}`;
+        if (cartInfo && cartInfo.location) {
+          // BẮC CẦU: Nếu Xe đã có vị trí (Kệ), cập nhật luôn vào thông tin chính
+          tramDisplay = TRAM.T4; // Chuyển sang trạm Hàng Khuôn
+          vitriDisplay = `${cartInfo.location} (Thông qua ${maXeScan})`;
         }
       }
     }
