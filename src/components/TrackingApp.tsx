@@ -52,6 +52,10 @@ export default function TrackingApp() {
   const scannerRef = useRef<any>(null);
   const audioOkRef = useRef<HTMLAudioElement | null>(null);
   const audioNgRef = useRef<HTMLAudioElement | null>(null);
+  
+  // Cooldown & De-dupe refs
+  const lastScannedCode = useRef<string>('');
+  const lastScannedTime = useRef<number>(0);
 
   useEffect(() => {
     const savedTram = localStorage.getItem('track_tram');
@@ -109,27 +113,27 @@ export default function TrackingApp() {
   const formatOrderCode = (raw: string) => {
     let code = raw.trim().toUpperCase().split('^')[0];
     
-    // 1234567890 -> RPRO-123456-7890
+    // Tự động thêm tiền tố XE - nếu là định dạng xe cũ hoặc chưa chuẩn
+    if (/^XE\d+$/.test(code)) {
+      return `XE - ${code.slice(2)}`;
+    }
+    if (/^XE - \d+$/.test(code)) {
+      return code;
+    }
+
+    // Luôn bắt đầu bằng RPRO- cho đơn hàng
     if (/^\d{10}$/.test(code)) {
       return `RPRO-${code.slice(0, 6)}-${code.slice(6, 10)}`;
     }
-    
-    // 123456-7890 -> RPRO-123456-7890
     if (/^\d{6}-\d{4}$/.test(code)) {
       return `RPRO-${code}`;
     }
-
-    // RPRO1234567890 -> RPRO-123456-7890
     if (/^RPRO\d{10}$/.test(code)) {
       return `RPRO-${code.slice(4, 10)}-${code.slice(10, 14)}`;
     }
-
-    // RPRO-1234567890 -> RPRO-123456-7890
     if (/^RPRO-\d{10}$/.test(code)) {
       return `RPRO-${code.slice(5, 11)}-${code.slice(11, 15)}`;
     }
-
-    // RPRO123456-7890 -> RPRO-123456-7890
     if (/^RPRO\d{6}-\d{4}$/.test(code)) {
       return `RPRO-${code.slice(4)}`;
     }
@@ -137,28 +141,57 @@ export default function TrackingApp() {
     return code;
   };
 
+  const isValidCode = (code: string) => {
+    // Chỉ chấp nhận RPRO-xxxxxx-xxxx hoặc XE - xxxx
+    return /^RPRO-\d{6}-\d{4}$/.test(code) || /^XE - \d+$/.test(code);
+  };
+
   const handleScan = (decodedText: string) => {
+    const now = Date.now();
     const rawText = decodedText.trim().toUpperCase();
+    const cleanText = rawText.split('^')[0];
+
+    // Chống quét trùng mã trong 2 giây (De-bounce)
+    if (cleanText === lastScannedCode.current && (now - lastScannedTime.current < 2000)) {
+      return;
+    }
+    
+    lastScannedCode.current = cleanText;
+    lastScannedTime.current = now;
     playSound('ok');
 
     if (scanMode === 'MAP_CART_TO_LOC') {
-      const cleanText = rawText.split('^')[0];
+      const formatted = formatOrderCode(cleanText);
       if (isScanningCart) {
-        setTempCartID(cleanText);
-        setIsScanningCart(false);
+        if (/^XE - \d+$/.test(formatted)) {
+          setTempCartID(formatted);
+          setIsScanningCart(false);
+          lastScannedCode.current = ''; // Reset để cho phép quét vị trí ngay sau đó
+        } else {
+          alert("Vui lòng quét mã XE (Định dạng: XE - ***)");
+        }
       } else {
-        if (cleanText !== tempCartID) {
-          setTempLocID(cleanText);
+        if (formatted !== tempCartID) {
+          setTempLocID(formatted);
           stopCamera();
         }
       }
     } else if (scanMode === 'WORK_LOCATION') {
-      setVitri(rawText.split('^')[0]);
+      const formatted = formatOrderCode(cleanText);
+      if (locationType === 'CART') {
+        if (/^XE - \d+$/.test(formatted)) {
+          setVitri(formatted);
+        } else {
+          alert("Ở chế độ Đóng lên xe, vị trí phải có định dạng XE - ***");
+        }
+      } else {
+        setVitri(formatted);
+      }
     } else if (scanMode === 'WORK_ORDER') {
       const rawCodes = rawText.split('|');
       const processedCodes = rawCodes
         .map(c => formatOrderCode(c))
-        .filter(c => c && !scannedCodes.includes(c));
+        .filter(c => isValidCode(c) && !scannedCodes.includes(c));
         
       if (processedCodes.length > 0) {
         setScannedCodes(prev => [...processedCodes, ...prev]);
