@@ -213,11 +213,15 @@ export default function TrackingApp() {
   };
 
   const handleSearch = async () => {
+    if (!searchQuery) return;
     setLoading(true);
-    let code = searchQuery.toUpperCase().trim();
-    if (!code.startsWith("RPRO-") && /^\d{6}-\d{4}$/.test(code)) code = "RPRO-" + code;
     
-    const result = await lookupOrder(code);
+    // Áp dụng quy tắc thông minh cho ô Tra cứu
+    const rawCodes = searchQuery.split('|');
+    const codeToSearch = formatOrderCode(rawCodes[0]); // Ưu tiên mã đầu tiên nếu là chuỗi gộp
+    
+    setSearchQuery(codeToSearch); // Cập nhật lại ô input để người dùng thấy mã đã chuẩn hóa
+    const result = await lookupOrder(codeToSearch);
     setSearchResult(result);
     setLoading(false);
   };
