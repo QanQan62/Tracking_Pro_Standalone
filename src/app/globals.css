@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --font-inter: var(--font-inter);
+  --font-outfit: var(--font-outfit);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+h1, h2, h3, h4, h5, h6, .font-heading {
+  font-family: var(--font-outfit), sans-serif !important;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.font-inter { font-family: var(--font-inter), sans-serif; }
+.font-outfit { font-family: var(--font-outfit), sans-serif; }
+
+@layer base {
+  * {
+    @apply border-slate-200 transition-colors duration-200;
+  }
+}
