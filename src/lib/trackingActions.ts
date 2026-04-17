@@ -151,7 +151,6 @@ export async function lookupOrder(maDonInput: string) {
           vitriDisplay = `${cartInfo.location} (Thông qua ${maXeScan})`;
         }
       }
-    }
 
     const logs = await db.select()
       .from(trackingLogs)
