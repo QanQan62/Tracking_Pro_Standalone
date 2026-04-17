@@ -127,12 +127,10 @@ export default function TrackingApp() {
   const formatOrderCode = (raw: string) => {
     let code = raw.trim().toUpperCase().split('^')[0];
     
-    // Tự động thêm tiền tố XE - nếu là định dạng xe cũ hoặc chưa chuẩn
-    if (/^XE\d+$/.test(code)) {
-      return `XE - ${code.slice(2)}`;
-    }
-    if (/^XE - \d+$/.test(code)) {
-      return code;
+    // Tự động chuẩn hóa tiền tố XE-
+    if (/^XE\s*-?\s*\d+$/.test(code)) {
+      const numMatch = code.match(/\d+/);
+      return numMatch ? `XE-${numMatch[0]}` : code;
     }
 
     // Luôn bắt đầu bằng RPRO- cho đơn hàng
@@ -156,8 +154,8 @@ export default function TrackingApp() {
   };
 
   const isValidCode = (code: string) => {
-    // Chỉ chấp nhận RPRO-xxxxxx-xxxx hoặc XE - xxxx
-    return /^RPRO-\d{6}-\d{4}$/.test(code) || /^XE - \d+$/.test(code);
+    // Chỉ chấp nhận RPRO-xxxxxx-xxxx hoặc XE-xxxx
+    return /^RPRO-\d{6}-\d{4}$/.test(code) || /^XE-\d+$/.test(code);
   };
 
   const handleScan = (decodedText: string) => {
@@ -176,14 +174,14 @@ export default function TrackingApp() {
     if (scanModeRef.current === 'MAP_CART_TO_LOC') {
       const formatted = formatOrderCode(cleanText);
       if (isScanningCartRef.current) {
-        if (/^XE - \d+$/.test(formatted)) {
+        if (/^XE-\d+$/.test(formatted)) {
           playSound('ok');
           setTempCartID(formatted);
           setIsScanningCart(false);
           lastScannedCode.current = ''; 
         } else {
           playSound('ng');
-          alert("Vui lòng quét mã XE (Định dạng: XE - ***)");
+          alert("Vui lòng quét mã XE (Định dạng: XE-***)");
         }
       } else {
         if (formatted !== tempCartIDRef.current) {
@@ -195,12 +193,12 @@ export default function TrackingApp() {
     } else if (scanModeRef.current === 'WORK_LOCATION') {
       const formatted = formatOrderCode(cleanText);
       if (locationTypeRef.current === 'CART') {
-        if (/^XE - \d+$/.test(formatted)) {
+        if (/^XE-\d+$/.test(formatted)) {
           playSound('ok');
           setVitri(formatted);
         } else {
           playSound('ng');
-          alert("Ở chế độ Đóng lên xe, vị trí phải có định dạng XE - ***");
+          alert("Ở chế độ Đóng lên xe, vị trí phải có định dạng XE-***");
         }
       } else {
         playSound('ok');

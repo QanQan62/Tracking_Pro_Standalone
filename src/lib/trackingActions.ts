@@ -141,10 +141,9 @@ export async function lookupOrder(maDonInput: string) {
     let vitriDisplay = info.location || "";
     let tramDisplay = info.station || "";
 
-    if (vitriDisplay.toUpperCase().includes("XE - ")) {
-      const match = vitriDisplay.toUpperCase().match(/XE - \d+/);
-      if (match) {
-        const maXeScan = match[0];
+    const xeMatch = vitriDisplay.toUpperCase().match(/XE\s*-?\s*(\d+)/);
+    if (xeMatch) {
+      const maXeScan = `XE-${xeMatch[1]}`;
         const cartInfo = await db.select().from(trackingCarts).where(eq(trackingCarts.code, maXeScan)).get();
         if (cartInfo && cartInfo.location) {
           // BẮC CẦU: Nếu Xe đã có vị trí (Kệ), cập nhật luôn vào thông tin chính
