@@ -8,10 +8,17 @@ import { TRAM } from './constants';
 
 export async function updateCartPosition(maXe: string, viTriMoi: string, msnv: string) {
   const thoiGian = new Date().toISOString();
-  const maXeUpper = maXe.toUpperCase();
-
+  const maXeNormalized = maXe.trim(); // "Xe-***"
+  
   try {
-    const existing = await db.select().from(trackingCarts).where(eq(trackingCarts.code, maXeUpper)).get();
+    // Tìm kiếm linh hoạt: chấp nhận Xe-***, XE-*** hoặc Xe - *** (nếu đã lỡ lưu)
+    const existing = await db.select().from(trackingCarts)
+      .where(or(
+        eq(trackingCarts.code, maXeNormalized),
+        eq(trackingCarts.code, maXeNormalized.toUpperCase()),
+        eq(trackingCarts.code, maXeNormalized.replace("Xe-", "Xe - "))
+      ))
+      .get();
 
     if (existing) {
       await db.update(trackingCarts)
@@ -20,17 +27,17 @@ export async function updateCartPosition(maXe: string, viTriMoi: string, msnv: s
           updatedBy: msnv,
           updatedAt: thoiGian
         })
-        .where(eq(trackingCarts.code, maXeUpper));
+        .where(eq(trackingCarts.code, existing.code)); // Cập nhật đúng bản ghi cũ
     } else {
       await db.insert(trackingCarts).values({
-        code: maXeUpper,
+        code: maXeNormalized,
         location: viTriMoi,
         updatedBy: msnv,
         updatedAt: thoiGian
       });
     }
 
-    return { success: true, message: `✅ Đã gán ${maXeUpper} vào ${viTriMoi}` };
+    return { success: true, message: `✅ Đã gán ${maXeNormalized} vào ${viTriMoi}` };
   } catch (error) {
     return { success: false, message: `❌ Lỗi: ${error instanceof Error ? error.message : String(error)}` };
   }
@@ -141,10 +148,16 @@ export async function lookupOrder(maDonInput: string) {
     let vitriDisplay = info.location || "";
     let tramDisplay = info.station || "";
 
-    const xeMatch = vitriDisplay.toUpperCase().match(/XE\s*-?\s*(\d+)/);
+    const xeMatch = vitriDisplay.match(/Xe\s*-?\s*(\d+)/i);
     if (xeMatch) {
-      const maXeScan = `XE-${xeMatch[1]}`;
-        const cartInfo = await db.select().from(trackingCarts).where(eq(trackingCarts.code, maXeScan)).get();
+      const maXeScan = `Xe-${xeMatch[1]}`;
+        const cartInfo = await db.select().from(trackingCarts)
+          .where(or(
+            eq(trackingCarts.code, maXeScan),
+            eq(trackingCarts.code, maXeScan.toUpperCase()),
+            eq(trackingCarts.code, maXeScan.replace("Xe-", "Xe - "))
+          ))
+          .get();
         if (cartInfo && cartInfo.location) {
           // BẮC CẦU: Nếu Xe đã có vị trí (Kệ), cập nhật luôn vào thông tin chính
           tramDisplay = TRAM.T4; // Chuyển sang trạm Hàng Khuôn
