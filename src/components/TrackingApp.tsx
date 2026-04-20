@@ -619,7 +619,7 @@ export default function TrackingApp() {
                      <div className="flex flex-col gap-1">
                        <div className="flex items-center gap-2">
                          <MapPin className="w-4 h-4 text-blue-600" />
-                         <span className="font-bold text-slate-700">{searchResult.info.station}</span>
+                         <span className="font-bold text-slate-700">{searchResult.info.tram || searchResult.info.station}</span>
                        </div>
                        <div className="flex items-center gap-2">
                          <History className="w-4 h-4 text-blue-600" />
