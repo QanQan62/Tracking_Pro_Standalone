@@ -8,7 +8,13 @@ import { TRAM } from './constants';
 
 export async function updateCartPosition(maXe: string, viTriMoi: string, msnv: string) {
   const thoiGian = new Date().toISOString();
-  const maXeNormalized = maXe.trim(); // "Xe-***"
+  let maXeNormalized = maXe.trim();
+  
+  // Chuẩn hóa mã xe: "Xe - 123" -> "Xe-123"
+  const xeMatch = maXeNormalized.match(/^Xe\s*-?\s*(\d+)$/i);
+  if (xeMatch) {
+    maXeNormalized = `Xe-${xeMatch[1]}`;
+  }
   
   try {
     // Tìm kiếm linh hoạt: chấp nhận Xe-***, XE-*** hoặc Xe - *** (nếu đã lỡ lưu)
@@ -53,6 +59,13 @@ export async function processOrders(
 ) {
   const thoiGian = new Date().toISOString();
   const ketQuaXuLy = [];
+
+  // Tự động cập nhật vị trí xe nếu quét đơn lên xe
+  const xeMatch = viTriMoi.match(/^Xe\s*-?\s*(\d+)$/i);
+  if (xeMatch) {
+    const maXeChuan = `Xe-${xeMatch[1]}`;
+    await updateCartPosition(maXeChuan, tramMoi, msnv);
+  }
 
   for (const maDon of danhSachMa) {
     const maTrim = maDon.trim();
@@ -159,8 +172,17 @@ export async function lookupOrder(maDonInput: string) {
           ))
           .get();
         if (cartInfo && cartInfo.location) {
-          // BẮC CẦU: Nếu Xe đã có vị trí (Kệ), cập nhật luôn vào thông tin chính
-          tramDisplay = TRAM.T4; // Chuyển sang trạm Hàng Khuôn
+          // BẮC CẦU: Nếu Xe đã có vị trí (Kệ hoặc Trạm khác), cập nhật luôn vào thông tin hiển thị
+          const isStation = Object.values(TRAM).includes(cartInfo.location as any);
+          if (isStation) {
+            tramDisplay = cartInfo.location;
+          } else {
+            // Nếu vị trí là Kệ (không phải Trạm), thường mặc định thuộc Trạm 4 (Hàng khuôn)
+            // Tuy nhiên ta giữ nguyên logic nếu trạm hiện tại của đơn đã là Trạm 4 hoặc Trạm 6
+            if (![TRAM.T4, TRAM.T6].includes(tramDisplay as any)) {
+              tramDisplay = TRAM.T4;
+            }
+          }
           vitriDisplay = `${cartInfo.location} (Thông qua ${maXeScan})`;
         }
       }
