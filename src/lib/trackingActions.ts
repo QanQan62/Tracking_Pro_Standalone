@@ -60,12 +60,9 @@ export async function processOrders(
   const thoiGian = new Date().toISOString();
   const ketQuaXuLy = [];
 
-  // Tự động cập nhật vị trí xe nếu quét đơn lên xe
-  const xeMatch = viTriMoi.match(/^Xe\s*-?\s*(\d+)$/i);
-  if (xeMatch) {
-    const maXeChuan = `Xe-${xeMatch[1]}`;
-    await updateCartPosition(maXeChuan, tramMoi, msnv);
-  }
+  // Lưu ý: KHÔNG cập nhật tracking_carts tại đây.
+  // Vị trí xe chỉ được cập nhật qua chức năng MAP_CART_TO_LOC (gán xe vào kệ).
+  // Việc gán trạm vào cart sẽ gây lỗi khi tra cứu bridge logic.
 
   for (const maDon of danhSachMa) {
     const maTrim = maDon.trim();

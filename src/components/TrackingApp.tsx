@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
 import { 
@@ -601,14 +601,13 @@ export default function TrackingApp() {
                >
                  {isSearchCameraOn ? <><CameraOff className="w-5 h-5" /> TẮT CAMERA</> : <><Camera className="w-5 h-5" /> QUÉT MÃ ĐƠN</>}
                </button>
-               {isSearchCameraOn && (
-                 <div className="relative overflow-hidden rounded-2xl bg-black aspect-square border-4 border-slate-700 mb-3">
-                   <div id="search-reader" className="w-full" />
-                   <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-slate-900/80 text-white text-xs px-4 py-1 rounded-full font-bold">
-                     Hướng camera vào mã QR đơn hàng
-                   </div>
+               {/* Luôn render div#search-reader trong DOM để Html5Qrcode hoạt động */}
+               <div style={{display: isSearchCameraOn ? 'block' : 'none'}} className="relative overflow-hidden rounded-2xl bg-black aspect-square border-4 border-slate-700 mb-3">
+                 <div id="search-reader" className="w-full" />
+                 <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-slate-900/80 text-white text-xs px-4 py-1 rounded-full font-bold">
+                   Hướng camera vào mã QR đơn hàng
                  </div>
-               )}
+               </div>
 
                {searchResult ? (
                  <div className="space-y-4">
