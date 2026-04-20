@@ -172,16 +172,14 @@ export async function lookupOrder(maDonInput: string) {
           ))
           .get();
         if (cartInfo && cartInfo.location) {
-          // BẮC CẦU: Nếu Xe đã có vị trí (Kệ hoặc Trạm khác), cập nhật luôn vào thông tin hiển thị
+          // BẮC CẦU: Xác định trạm dựa trên vị trí xe
           const isStation = Object.values(TRAM).includes(cartInfo.location as any);
           if (isStation) {
+            // Xe đang đỗ tại một Trạm → hiển thị đúng trạm đó
             tramDisplay = cartInfo.location;
           } else {
-            // Nếu vị trí là Kệ (không phải Trạm), thường mặc định thuộc Trạm 4 (Hàng khuôn)
-            // Tuy nhiên ta giữ nguyên logic nếu trạm hiện tại của đơn đã là Trạm 4 hoặc Trạm 6
-            if (![TRAM.T4, TRAM.T6].includes(tramDisplay as any)) {
-              tramDisplay = TRAM.T4;
-            }
+            // Xe đang ở vị trí kệ (A-03, B-01...) → chắc chắn thuộc khu Hàng khuôn (T4)
+            tramDisplay = TRAM.T4;
           }
           vitriDisplay = `${cartInfo.location} (Thông qua ${maXeScan})`;
         }

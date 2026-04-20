@@ -48,8 +48,10 @@ export default function TrackingApp() {
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResult, setSearchResult] = useState<any>(null);
+  const [isSearchCameraOn, setIsSearchCameraOn] = useState(false);
 
   const scannerRef = useRef<any>(null);
+  const searchScannerRef = useRef<any>(null);
   const audioOkRef = useRef<HTMLAudioElement | null>(null);
   const audioNgRef = useRef<HTMLAudioElement | null>(null);
   
@@ -102,6 +104,17 @@ export default function TrackingApp() {
     }
   };
 
+  const stopSearchCamera = async () => {
+    if (searchScannerRef.current && isSearchCameraOn) {
+      try {
+        await searchScannerRef.current.stop();
+        setIsSearchCameraOn(false);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  };
+
   const startCamera = async () => {
     if (!window.Html5Qrcode) return;
     
@@ -121,6 +134,49 @@ export default function TrackingApp() {
     } catch (err) {
       console.error(err);
       setIsCameraOn(false);
+    }
+  };
+
+  const startSearchCamera = async () => {
+    if (!window.Html5Qrcode) return;
+    
+    setIsSearchCameraOn(true);
+    const html5QrCode = new window.Html5Qrcode("search-reader");
+    searchScannerRef.current = html5QrCode;
+
+    try {
+      await html5QrCode.start(
+        { facingMode: "environment" },
+        { fps: 15, qrbox: 250 },
+        (decodedText: string) => {
+          handleSearchScan(decodedText);
+        },
+        () => {}
+      );
+    } catch (err) {
+      console.error(err);
+      setIsSearchCameraOn(false);
+    }
+  };
+
+  const handleSearchScan = async (decodedText: string) => {
+    // Tách các đơn gộp bằng "|", lấy tất cả mã RPRO hợp lệ
+    const parts = decodedText.trim().toUpperCase().split('|');
+    const rproCodes = parts
+      .map(p => formatOrderCode(p.split('^')[0]))
+      .filter(c => /^RPRO-\d{6}-\d{4}$/.test(c));
+
+    if (rproCodes.length > 0) {
+      const firstCode = rproCodes[0];
+      playSound('ok');
+      await stopSearchCamera();
+      setSearchQuery(firstCode);
+      setLoading(true);
+      const result = await lookupOrder(firstCode);
+      setSearchResult(result);
+      setLoading(false);
+    } else {
+      playSound('ng');
     }
   };
 
@@ -291,14 +347,14 @@ export default function TrackingApp() {
         </h1>
         <div className="flex gap-1">
            <button 
-             onClick={() => { stopCamera(); setScreen('search'); }}
+             onClick={() => { stopCamera(); stopSearchCamera(); setScreen('search'); }}
              className="flex items-center gap-1 px-3 py-1.5 hover:bg-blue-600 rounded-lg transition-colors text-sm font-medium"
            >
              <Search className="w-4 h-4" /> Tra cứu
            </button>
            {screen !== 'setup' ? (
              <button 
-               onClick={() => { stopCamera(); setScreen('setup'); }}
+               onClick={() => { stopCamera(); stopSearchCamera(); setScreen('setup'); }}
                className="flex items-center gap-1 px-3 py-1.5 hover:bg-blue-600 rounded-lg transition-colors text-sm font-medium"
              >
                <Settings className="w-4 h-4" /> Cài đặt
@@ -524,7 +580,7 @@ export default function TrackingApp() {
           <div className="space-y-6 animate-in slide-in-from-top duration-300">
              <div className="bg-white p-4 rounded-2xl shadow-lg border border-slate-100">
                <h2 className="text-center font-bold text-lg text-slate-400 mb-4 uppercase tracking-widest">Tra cứu đơn hàng</h2>
-               <div className="flex gap-2 mb-4">
+               <div className="flex gap-2 mb-3">
                  <input 
                    type="text"
                    className="flex-1 p-4 rounded-xl border border-blue-500 font-bold"
@@ -535,6 +591,24 @@ export default function TrackingApp() {
                  />
                  <button onClick={handleSearch} className="bg-blue-600 text-white px-6 rounded-xl"><Search /></button>
                </div>
+
+               {/* Camera scanner for search */}
+               <button
+                 onClick={() => isSearchCameraOn ? stopSearchCamera() : startSearchCamera()}
+                 className={`w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 mb-3 transition-all ${
+                   isSearchCameraOn ? 'bg-red-100 text-red-600' : 'bg-slate-700 text-white'
+                 }`}
+               >
+                 {isSearchCameraOn ? <><CameraOff className="w-5 h-5" /> TẮT CAMERA</> : <><Camera className="w-5 h-5" /> QUÉT MÃ ĐƠN</>}
+               </button>
+               {isSearchCameraOn && (
+                 <div className="relative overflow-hidden rounded-2xl bg-black aspect-square border-4 border-slate-700 mb-3">
+                   <div id="search-reader" className="w-full" />
+                   <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-slate-900/80 text-white text-xs px-4 py-1 rounded-full font-bold">
+                     Hướng camera vào mã QR đơn hàng
+                   </div>
+                 </div>
+               )}
 
                {searchResult ? (
                  <div className="space-y-4">
@@ -595,7 +669,7 @@ export default function TrackingApp() {
              </div>
              
              <button 
-               onClick={() => { setScreen(station ? 'work' : 'setup'); setSearchResult(null); }}
+               onClick={() => { stopSearchCamera(); setScreen(station ? 'work' : 'setup'); setSearchResult(null); }}
                className="w-full bg-slate-200 py-4 rounded-xl font-bold"
              >
                QUAY LẠI
