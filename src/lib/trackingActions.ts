@@ -2,12 +2,20 @@
 
 import { db } from './db';
 import { trackingCarts, trackingOrders, trackingLogs } from '@/db/schema';
-import { eq, like, or } from 'drizzle-orm';
+import { eq, or } from 'drizzle-orm';
 
 import { TRAM } from './constants';
 
+/**
+ * Trả về thời gian hiện tại theo múi giờ Việt Nam (GMT+7)
+ * Định dạng: "2026-04-20T09:54:49+07:00"
+ */
+function getVNTime(): string {
+  return new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }).replace(' ', 'T') + ':00+07:00';
+}
+
 export async function updateCartPosition(maXe: string, viTriMoi: string, msnv: string) {
-  const thoiGian = new Date().toISOString();
+  const thoiGian = getVNTime();
   let maXeNormalized = maXe.trim();
   
   // Chuẩn hóa mã xe: "Xe - 123" -> "Xe-123"
@@ -33,7 +41,7 @@ export async function updateCartPosition(maXe: string, viTriMoi: string, msnv: s
           updatedBy: msnv,
           updatedAt: thoiGian
         })
-        .where(eq(trackingCarts.code, existing.code)); // Cập nhật đúng bản ghi cũ
+        .where(eq(trackingCarts.code, existing.code));
     } else {
       await db.insert(trackingCarts).values({
         code: maXeNormalized,
@@ -57,22 +65,17 @@ export async function processOrders(
   loaiHangInput?: string,
   ghiChu?: string
 ) {
-  const thoiGian = new Date().toISOString();
+  const thoiGian = getVNTime();
   const ketQuaXuLy = [];
 
   // Lưu ý: KHÔNG cập nhật tracking_carts tại đây.
-  // Vị trí xe chỉ được cập nhật qua chức năng MAP_CART_TO_LOC (gán xe vào kệ).
-  // Việc gán trạm vào cart sẽ gây lỗi khi tra cứu bridge logic.
+  // Vị trí xe chỉ được cập nhật qua chức năng MAP_CART_TO_LOC (gán xe vào kệ cụ thể).
 
   for (const maDon of danhSachMa) {
     const maTrim = maDon.trim();
     if (!maTrim) continue;
 
     try {
-      // Find order in tracking_orders
-      // Note: GAS version handled combined orders like "A|B|C". 
-      // In a real DB, we should ideally store them separately or use LIKE.
-      // For migration fidelity, we check if the code exists exactly or as part of a joined string.
       const existing = await db.select().from(trackingOrders).where(eq(trackingOrders.orderCode, maTrim)).get();
 
       let finalLoaiHang = existing?.category || "";
@@ -89,7 +92,6 @@ export async function processOrders(
       if (ghiChu) locationText += ` (Ghi chú: ${ghiChu})`;
 
       if (!existing) {
-        // Create new
         await db.insert(trackingOrders).values({
           orderCode: maTrim,
           category: finalLoaiHang,
@@ -110,7 +112,6 @@ export async function processOrders(
 
         ketQuaXuLy.push({ ma: maTrim, status: "ok", msg: `Đã nhận (${finalLoaiHang})` });
       } else {
-        // Update existing
         const tramCu = existing.station;
         const viTriCu = existing.location || "";
         const viTriFinal = (tramMoi === tramCu && !viTriCu.includes(viTriMoi)) ? `${viTriCu}, ${locationText}` : locationText;
@@ -154,33 +155,31 @@ export async function lookupOrder(maDonInput: string) {
     const info = await db.select().from(trackingOrders).where(eq(trackingOrders.orderCode, tuKhoa)).get();
     if (!info) return null;
 
-    // LOGIC BẮC CẦU: check if location is a cart
+    // LOGIC BẮC CẦU: kiểm tra nếu vị trí đơn đang là một chiếc xe
     let vitriDisplay = info.location || "";
     let tramDisplay = info.station || "";
 
     const xeMatch = vitriDisplay.match(/Xe\s*-?\s*(\d+)/i);
     if (xeMatch) {
       const maXeScan = `Xe-${xeMatch[1]}`;
-        const cartInfo = await db.select().from(trackingCarts)
-          .where(or(
-            eq(trackingCarts.code, maXeScan),
-            eq(trackingCarts.code, maXeScan.toUpperCase()),
-            eq(trackingCarts.code, maXeScan.replace("Xe-", "Xe - "))
-          ))
-          .get();
-        if (cartInfo && cartInfo.location) {
-          // BẮC CẦU: Xác định trạm dựa trên vị trí xe
-          const isStation = Object.values(TRAM).includes(cartInfo.location as any);
-          if (isStation) {
-            // Xe đang đỗ tại một Trạm → hiển thị đúng trạm đó
-            tramDisplay = cartInfo.location;
-          } else {
-            // Xe đang ở vị trí kệ (A-03, B-01...) → chắc chắn thuộc khu Hàng khuôn (T4)
-            tramDisplay = TRAM.T4;
-          }
+      const cartInfo = await db.select().from(trackingCarts)
+        .where(or(
+          eq(trackingCarts.code, maXeScan),
+          eq(trackingCarts.code, maXeScan.toUpperCase()),
+          eq(trackingCarts.code, maXeScan.replace("Xe-", "Xe - "))
+        ))
+        .get();
+
+      if (cartInfo && cartInfo.location) {
+        const isStation = Object.values(TRAM).includes(cartInfo.location as any);
+        if (!isStation) {
+          // Xe đã được gán vào vị trí kệ cụ thể (A-03, B-01...) → bridge sang T4
+          tramDisplay = TRAM.T4;
           vitriDisplay = `${cartInfo.location} (Thông qua ${maXeScan})`;
         }
+        // Nếu cart.location là tên Trạm → xe chưa được đặt vào kệ → giữ nguyên thông tin gốc của đơn
       }
+    }
 
     const logs = await db.select()
       .from(trackingLogs)
@@ -188,9 +187,9 @@ export async function lookupOrder(maDonInput: string) {
       .orderBy(trackingLogs.timestamp)
       .all();
 
-    // Map logs to consistent format
+    // Hiển thị thời gian theo múi giờ Việt Nam (GMT+7)
     const formattedLogs = logs.reverse().map(l => ({
-      tg: new Date(l.timestamp).toLocaleString('vi-VN'),
+      tg: new Date(l.timestamp).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }),
       hanhdong: l.action,
       tu: l.fromStation,
       den: l.toStation,
@@ -218,7 +217,7 @@ export async function lookupOrder(maDonInput: string) {
         ...info,
         tram: tramDisplay,
         vitri: vitriDisplay,
-        tg: info.updatedAt ? new Date(info.updatedAt).toLocaleString('vi-VN') : ""
+        tg: info.updatedAt ? new Date(info.updatedAt).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : ""
       },
       logs: formattedLogs,
       missing: missingSteps
