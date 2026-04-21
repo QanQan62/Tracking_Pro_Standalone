@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
 import { 
@@ -15,9 +15,12 @@ import {
   CameraOff,
   CheckCircle2,
   AlertCircle,
-  Loader2
+  Loader2,
+  Download,
+  FileSpreadsheet
 } from 'lucide-react';
-import { processOrders, updateCartPosition, lookupOrder } from '@/lib/trackingActions';
+import { processOrders, updateCartPosition, lookupOrder, getTrackingReport } from '@/lib/trackingActions';
+import * as XLSX from 'xlsx';
 import { TRAM } from '@/lib/constants';
 
 declare global {
@@ -27,7 +30,7 @@ declare global {
 }
 
 export default function TrackingApp() {
-  const [screen, setScreen] = useState<'setup' | 'work' | 'search'>('setup');
+  const [screen, setScreen] = useState<'setup' | 'work' | 'search' | 'report'>('setup');
   const [station, setStation] = useState('');
   const [msnv, setMsnv] = useState('');
   const [scannedCodes, setScannedCodes] = useState<string[]>([]);
@@ -49,6 +52,11 @@ export default function TrackingApp() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResult, setSearchResult] = useState<any>(null);
   const [isSearchCameraOn, setIsSearchCameraOn] = useState(false);
+  
+  // Report state
+  const [reportData, setReportData] = useState<any[]>([]);
+  const [reportFromDate, setReportFromDate] = useState('');
+  const [reportToDate, setReportToDate] = useState('');
 
   const scannerRef = useRef<any>(null);
   const searchScannerRef = useRef<any>(null);
@@ -334,6 +342,26 @@ export default function TrackingApp() {
     setLoading(false);
   };
 
+  const handleFetchReport = async () => {
+    setLoading(true);
+    const data = await getTrackingReport(reportFromDate, reportToDate);
+    setReportData(data);
+    setLoading(false);
+    setScreen('report');
+  };
+
+  const downloadExcel = () => {
+    if (reportData.length === 0) return;
+    
+    const worksheet = XLSX.utils.json_to_sheet(reportData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Tracking_Pro_Report");
+    
+    // Generate filename with date
+    const dateStr = new Date().toISOString().split('T')[0];
+    XLSX.writeFile(workbook, `Tracking_Pro_Report_${dateStr}.xlsx`);
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-20">
       <audio ref={audioOkRef} src="https://assets.mixkit.co/active_storage/sfx/2578/2578-preview.m4a" />
@@ -351,6 +379,12 @@ export default function TrackingApp() {
              className="flex items-center gap-1 px-3 py-1.5 hover:bg-blue-600 rounded-lg transition-colors text-sm font-medium"
            >
              <Search className="w-4 h-4" /> Tra cứu
+           </button>
+           <button 
+             onClick={handleFetchReport}
+             className="flex items-center gap-1 px-3 py-1.5 hover:bg-blue-600 rounded-lg transition-colors text-sm font-medium"
+           >
+             <FileSpreadsheet className="w-4 h-4" /> Báo cáo
            </button>
            {screen !== 'setup' ? (
              <button 
@@ -432,18 +466,29 @@ export default function TrackingApp() {
 
             {/* Special Mode: Leanline Cart Assignment */}
             {station.includes("Trạm 4") && (
-              <button 
-                onClick={() => {
-                  setScanMode('MAP_CART_TO_LOC');
-                  setTempCartID('');
-                  setTempLocID('');
-                  setIsScanningCart(true);
-                }}
-                className="w-full bg-slate-800 text-white p-4 rounded-xl flex flex-col items-center gap-1 shadow-md active:scale-95 transition-all"
-              >
-                <Truck className="w-6 h-6" />
-                <span className="font-bold">NHẬP XE VÀO KỆ (LEANLINE)</span>
-              </button>
+              <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 space-y-3">
+                <div className="text-xs font-bold text-slate-400 uppercase text-center tracking-wider">Cách 1: Quản lý vị trí xe đẩy</div>
+                <button 
+                  onClick={() => {
+                    setScanMode('MAP_CART_TO_LOC');
+                    setTempCartID('');
+                    setTempLocID('');
+                    setIsScanningCart(true);
+                  }}
+                  className="w-full bg-slate-800 text-white p-4 rounded-xl flex flex-col items-center gap-1 shadow-md active:scale-95 transition-all"
+                >
+                  <Truck className="w-6 h-6" />
+                  <span className="font-bold">NHẬP XE VÀO KỆ (LEANLINE)</span>
+                </button>
+              </div>
+            )}
+
+            {station.includes("Trạm 4") && (
+              <div className="flex items-center gap-4 my-2">
+                <div className="h-px bg-slate-200 flex-1"></div>
+                <span className="text-xs font-bold text-slate-400 uppercase">Hoặc</span>
+                <div className="h-px bg-slate-200 flex-1"></div>
+              </div>
             )}
 
             {/* Step Indicator */}
@@ -454,15 +499,16 @@ export default function TrackingApp() {
               {scanMode === 'WORK_ORDER' ? 'BƯỚC 1: QUÉT ĐƠN HÀNG' : 
                scanMode === 'MAP_CART_TO_LOC' ? 'GÁN XE ➔ VỊ TRÍ KỆ' : 'BƯỚC 2: QUÉT VỊ TRÍ 📍'}
             </div>
+            
+            {scanMode === 'WORK_ORDER' && station.includes("Trạm 4") && (
+              <div className="text-xs font-bold text-slate-400 uppercase text-center tracking-wider mb-2">Cách 2: Quét đơn hàng trực tiếp</div>
+            )}
 
             {/* QR Scanner UI */}
-            <div className="relative overflow-hidden rounded-2xl bg-black aspect-square border-4 border-blue-200">
-               {!isCameraOn && (
-                 <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400">
-                   <Camera className="w-12 h-12 mb-2 opacity-20" />
-                   <p className="text-xs">Camera đang tắt</p>
-                 </div>
-               )}
+            <div 
+              style={{ display: isCameraOn ? 'block' : 'none' }}
+              className="relative overflow-hidden rounded-2xl bg-black shadow-inner"
+            >
                <div id="reader" className="w-full"></div>
             </div>
 
@@ -506,7 +552,7 @@ export default function TrackingApp() {
                   </ul>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
+                <div className={`grid ${station.includes("Trạm 4") ? 'grid-cols-1' : 'grid-cols-2'} gap-2`}>
                    <button 
                      disabled={scannedCodes.length === 0}
                      onClick={() => { setScanMode('WORK_LOCATION'); setLocationType('NORMAL'); }}
@@ -514,13 +560,15 @@ export default function TrackingApp() {
                    >
                      ĐƠN ➔ VỊ TRÍ
                    </button>
-                   <button 
-                     disabled={scannedCodes.length === 0}
-                     onClick={() => { setScanMode('WORK_LOCATION'); setLocationType('CART'); }}
-                     className="bg-slate-800 text-white py-4 rounded-xl font-bold disabled:opacity-50"
-                   >
-                     ĐÓNG LÊN XE 🚚
-                   </button>
+                   {!station.includes("Trạm 4") && (
+                     <button 
+                       disabled={scannedCodes.length === 0}
+                       onClick={() => { setScanMode('WORK_LOCATION'); setLocationType('CART'); }}
+                       className="bg-slate-800 text-white py-4 rounded-xl font-bold disabled:opacity-50"
+                     >
+                       ĐÓNG LÊN XE 🚚
+                     </button>
+                   )}
                 </div>
               </div>
             )}
@@ -530,12 +578,30 @@ export default function TrackingApp() {
               <div className="space-y-4 animate-in slide-in-from-right duration-300">
                 {scanMode === 'MAP_CART_TO_LOC' ? (
                   <div className="bg-white p-4 rounded-2xl shadow-inner border-2 border-slate-800 space-y-3">
-                    <div className={`p-4 rounded-xl text-center font-bold ${tempCartID ? 'bg-slate-100 text-slate-400' : 'bg-amber-400 text-black'}`}>
+                    <div className={`p-4 rounded-xl text-center font-bold flex justify-center items-center ${tempCartID ? 'bg-slate-100 text-slate-400' : 'bg-amber-400 text-black'}`}>
                       {tempCartID ? `🚚 XE: ${tempCartID}` : '1. QUÉT MÃ XE 🚚'}
                     </div>
-                    <div className={`p-4 rounded-xl text-center font-bold ${tempLocID ? 'bg-slate-100 text-slate-400' : !tempCartID ? 'bg-slate-100 text-slate-300' : 'bg-green-500 text-white'}`}>
-                      {tempLocID ? `📍 KỆ: ${tempLocID}` : '2. QUÉT MÃ KỆ 📍'}
-                    </div>
+                    
+                    {!isScanningCart ? (
+                      <div className="flex gap-2">
+                        <div className={`flex-1 p-4 rounded-xl text-center font-bold flex justify-center items-center ${tempLocID ? 'bg-slate-100 text-slate-400' : 'bg-green-500 text-white'}`}>
+                          {tempLocID ? `📍 KỆ: ${tempLocID}` : '2. QUÉT KỆ 📍'}
+                        </div>
+                        <button 
+                          onClick={() => {
+                            const val = prompt("Nhập mã kệ:");
+                            if (val) setTempLocID(formatOrderCode(val));
+                          }} 
+                          className="bg-slate-200 px-4 rounded-xl font-bold hover:bg-slate-300 active:scale-95 transition-all"
+                        >
+                          TAY
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="p-4 rounded-xl text-center font-bold flex justify-center items-center bg-slate-100 text-slate-300">
+                        2. QUÉT MÃ KỆ 📍
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -602,7 +668,7 @@ export default function TrackingApp() {
                  {isSearchCameraOn ? <><CameraOff className="w-5 h-5" /> TẮT CAMERA</> : <><Camera className="w-5 h-5" /> QUÉT MÃ ĐƠN</>}
                </button>
                {/* Luôn render div#search-reader trong DOM để Html5Qrcode hoạt động */}
-               <div style={{display: isSearchCameraOn ? 'block' : 'none'}} className="relative overflow-hidden rounded-2xl bg-black aspect-square border-4 border-slate-700 mb-3">
+               <div style={{display: isSearchCameraOn ? 'block' : 'none'}} className="relative overflow-hidden rounded-2xl bg-black shadow-inner mb-3">
                  <div id="search-reader" className="w-full" />
                  <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-slate-900/80 text-white text-xs px-4 py-1 rounded-full font-bold">
                    Hướng camera vào mã QR đơn hàng
@@ -673,6 +739,100 @@ export default function TrackingApp() {
              >
                QUAY LẠI
              </button>
+          </div>
+        )}
+
+        {/* Screen: Report */}
+        {screen === 'report' && (
+          <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-300">
+            <div className="bg-white p-4 rounded-2xl shadow-lg border border-slate-100">
+              <div className="flex flex-col gap-4 mb-6">
+                <div className="flex justify-between items-center">
+                  <h2 className="font-bold text-xl text-slate-800 flex items-center gap-2">
+                    <FileSpreadsheet className="text-green-600" /> BÁO CÁO VỊ TRÍ ĐƠN
+                  </h2>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <div className="flex flex-1 items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
+                    <input 
+                      type="date" 
+                      className="flex-1 bg-transparent border-none outline-none text-sm font-medium text-slate-700 w-full"
+                      value={reportFromDate}
+                      onChange={e => setReportFromDate(e.target.value)}
+                    />
+                    <span className="text-slate-400 font-bold">-</span>
+                    <input 
+                      type="date" 
+                      className="flex-1 bg-transparent border-none outline-none text-sm font-medium text-slate-700 w-full"
+                      value={reportToDate}
+                      onChange={e => setReportToDate(e.target.value)}
+                    />
+                  </div>
+                  <div className="flex gap-2 sm:w-auto">
+                    <button 
+                      onClick={handleFetchReport}
+                      className="flex-1 sm:flex-none bg-blue-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-blue-700 transition-colors shadow-sm"
+                    >
+                      Lọc
+                    </button>
+                    <button 
+                      onClick={downloadExcel}
+                      className="flex-1 sm:flex-none bg-green-600 text-white px-4 py-3 rounded-xl flex justify-center items-center gap-2 font-bold hover:bg-green-700 transition-colors shadow-sm"
+                    >
+                      <Download className="w-4 h-4" /> EXCEL
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto border rounded-xl">
+                <table className="w-full text-left text-sm border-collapse min-w-[1200px]">
+                  <thead className="bg-slate-50 border-b">
+                    <tr>
+                      <th className="p-3 font-bold text-slate-600">STT</th>
+                      <th className="p-3 font-bold text-slate-600">Mã Đơn</th>
+                      <th className="p-3 font-bold text-blue-600">Trạm Hiện Tại</th>
+                      <th className="p-3 font-bold text-blue-600">Trạng Thái Hiện Tại</th>
+                      <th className="p-3 font-bold text-slate-600">Trạm 1 (Dán)</th>
+                      <th className="p-3 font-bold text-slate-600">Trạm 2 (Cắt)</th>
+                      <th className="p-3 font-bold text-slate-600">Trạm 3 (Thành hình)</th>
+                      <th className="p-3 font-bold text-slate-600">Trạm 4 (Hàng khuôn)</th>
+                      <th className="p-3 font-bold text-slate-600">Trạm 5 (Die-cut)</th>
+                      <th className="p-3 font-bold text-slate-600">Trạm 6 (Kho)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {reportData.length === 0 ? (
+                      <tr>
+                        <td colSpan={10} className="p-10 text-center text-slate-400 italic">Chưa có dữ liệu</td>
+                      </tr>
+                    ) : (
+                      reportData.map((row, idx) => (
+                        <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                          <td className="p-3 text-slate-500">{row.STT}</td>
+                          <td className="p-3 font-bold text-slate-800">{row["Mã Đơn"]}</td>
+                          <td className="p-3 font-bold text-blue-700 bg-blue-50/50">{row["Trạm Hiện Tại"]}</td>
+                          <td className="p-3 text-[11px] font-bold text-red-600 bg-blue-50/50 italic">{row["Trạng Thái Hiện Tại"]}</td>
+                          <td className="p-3 text-[11px] leading-tight text-slate-600">{row["Trạm 1: Khu vực Dán"]}</td>
+                          <td className="p-3 text-[11px] leading-tight text-slate-600">{row["Trạm 2: Khu vực Cắt"]}</td>
+                          <td className="p-3 text-[11px] leading-tight text-slate-600">{row["Trạm 3: Khu vực Thành hình"]}</td>
+                          <td className="p-3 text-[11px] leading-tight text-slate-600">{row["Trạm 4: Khu vực Hàng khuôn"]}</td>
+                          <td className="p-3 text-[11px] leading-tight text-slate-600">{row["Trạm 5: Khu vực Hàng Die-cut"]}</td>
+                          <td className="p-3 text-[11px] leading-tight text-slate-600">{row["Trạm 6: Kho tạm"]}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            
+            <button 
+              onClick={() => setScreen(station ? 'work' : 'setup')}
+              className="w-full bg-slate-200 py-4 rounded-xl font-bold hover:bg-slate-300 transition-colors mb-10"
+            >
+              QUAY LẠI
+            </button>
           </div>
         )}
       </main>

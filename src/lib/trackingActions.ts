@@ -175,7 +175,7 @@ export async function lookupOrder(maDonInput: string) {
         if (!isStation) {
           // Xe đã được gán vào vị trí kệ cụ thể (A-03, B-01...) → bridge sang T4
           tramDisplay = TRAM.T4;
-          vitriDisplay = `${cartInfo.location} (Thông qua ${maXeScan})`;
+          vitriDisplay = `${cartInfo.location} (Đang ở trên ${maXeScan})`;
         }
         // Nếu cart.location là tên Trạm → xe chưa được đặt vào kệ → giữ nguyên thông tin gốc của đơn
       }
@@ -225,5 +225,126 @@ export async function lookupOrder(maDonInput: string) {
   } catch (error) {
     console.error("Lookup error:", error);
     return null;
+  }
+}
+
+export async function getTrackingReport(startDate?: string, endDate?: string) {
+  try {
+    let orders = await db.select().from(trackingOrders).all();
+    
+    if (startDate || endDate) {
+      orders = orders.filter(o => {
+        if (!o.updatedAt) return false;
+        // Parse the timestamp string (e.g. 2026-04-20T09:54:49+07:00) into a comparable value
+        const orderTime = new Date(o.updatedAt).getTime();
+        
+        let valid = true;
+        if (startDate) {
+          const start = new Date(`${startDate}T00:00:00+07:00`).getTime();
+          if (orderTime < start) valid = false;
+        }
+        if (endDate) {
+          const end = new Date(`${endDate}T23:59:59+07:00`).getTime();
+          if (orderTime > end) valid = false;
+        }
+        return valid;
+      });
+    }
+
+    const logs = await db.select().from(trackingLogs).orderBy(trackingLogs.timestamp).all();
+    const carts = await db.select().from(trackingCarts).all();
+
+    // Map carts for quick lookup
+    const cartMap = new Map();
+    carts.forEach(c => cartMap.set(c.code, c));
+
+    // Group logs by orderCode
+    const logsByOrder: Record<string, any[]> = {};
+    logs.forEach(log => {
+      if (!logsByOrder[log.orderCode]) {
+        logsByOrder[log.orderCode] = [];
+      }
+      logsByOrder[log.orderCode].push(log);
+    });
+
+    const reportData = orders.map((order, index) => {
+      const orderLogs = logsByOrder[order.orderCode] || [];
+      
+      const getStationData = (stationKey: keyof typeof TRAM) => {
+        const stationName = TRAM[stationKey];
+        
+        // Find the latest log for this station
+        const stationLog = [...orderLogs].reverse().find(l => l.toStation === stationName);
+        
+        if (!stationLog) {
+          // Special logic for T4: if no T4 log, check if it's in a cart from T3
+          if (stationKey === 'T4') {
+            const t3Log = [...orderLogs].reverse().find(l => l.toStation === TRAM.T3);
+            if (t3Log) {
+              const xeMatch = t3Log.note?.match(/Xe\s*-?\s*(\d+)/i);
+              if (xeMatch) {
+                const maXe = `Xe-${xeMatch[1]}`;
+                const cartInfo = cartMap.get(maXe);
+                if (cartInfo && cartInfo.location && !Object.values(TRAM).includes(cartInfo.location as any)) {
+                  // If cart is at a shelf (not a station), this is its T4 location
+                  const time = cartInfo.updatedAt ? new Date(cartInfo.updatedAt).toLocaleString('vi-VN', { 
+                    timeZone: 'Asia/Ho_Chi_Minh',
+                    hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit'
+                  }) : "N/A";
+                  return `${cartInfo.location} (Xe: ${maXe}) - ${time}`;
+                }
+              }
+            }
+          }
+          return "";
+        }
+        
+        const time = new Date(stationLog.timestamp).toLocaleString('vi-VN', { 
+          timeZone: 'Asia/Ho_Chi_Minh',
+          hour: '2-digit',
+          minute: '2-digit',
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric'
+        });
+        
+        return `${stationLog.note} - ${time}`;
+      };
+
+      const t1Data = getStationData('T1');
+      const t2Data = getStationData('T2');
+      const t3Data = getStationData('T3');
+      const t4Data = getStationData('T4');
+      const t5Data = getStationData('T5');
+      const t6Data = getStationData('T6');
+
+      // Determine latest station info
+      let latestStation = "";
+      let latestStatus = "";
+      if (t6Data) { latestStation = "Trạm 6"; latestStatus = t6Data; }
+      else if (t5Data) { latestStation = "Trạm 5"; latestStatus = t5Data; }
+      else if (t4Data) { latestStation = "Trạm 4"; latestStatus = t4Data; }
+      else if (t3Data) { latestStation = "Trạm 3"; latestStatus = t3Data; }
+      else if (t2Data) { latestStation = "Trạm 2"; latestStatus = t2Data; }
+      else if (t1Data) { latestStation = "Trạm 1"; latestStatus = t1Data; }
+
+      return {
+        "STT": index + 1,
+        "Mã Đơn": order.orderCode,
+        "Trạm Hiện Tại": latestStation,
+        "Trạng Thái Hiện Tại": latestStatus,
+        "Trạm 1: Khu vực Dán": t1Data,
+        "Trạm 2: Khu vực Cắt": t2Data,
+        "Trạm 3: Khu vực Thành hình": t3Data,
+        "Trạm 4: Khu vực Hàng khuôn": t4Data,
+        "Trạm 5: Khu vực Hàng Die-cut": t5Data,
+        "Trạm 6: Kho tạm": t6Data,
+      };
+    });
+
+    return reportData;
+  } catch (error) {
+    console.error("Report error:", error);
+    return [];
   }
 }
