@@ -11,7 +11,18 @@ import { TRAM } from './constants';
  * Định dạng: "2026-04-20T09:54:49+07:00"
  */
 function getVNTime(): string {
-  return new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }).replace(' ', 'T') + ':00+07:00';
+  return new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }).replace(' ', 'T') + '+07:00';
+}
+
+/**
+ * Hàm hỗ trợ parse ngày tháng an toàn, tự động fix lỗi dư ':00' của dữ liệu cũ
+ */
+function parseDateString(dateStr: string): Date {
+  if (!dateStr) return new Date();
+  if (dateStr.endsWith(':00+07:00')) {
+    dateStr = dateStr.replace(/:00\+07:00$/, '+07:00');
+  }
+  return new Date(dateStr);
 }
 
 export async function updateCartPosition(maXe: string, viTriMoi: string, msnv: string) {
@@ -189,7 +200,7 @@ export async function lookupOrder(maDonInput: string) {
 
     // Hiển thị thời gian theo múi giờ Việt Nam (GMT+7)
     const formattedLogs = logs.reverse().map(l => ({
-      tg: new Date(l.timestamp).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }),
+      tg: parseDateString(l.timestamp).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }),
       hanhdong: l.action,
       tu: l.fromStation,
       den: l.toStation,
@@ -217,7 +228,7 @@ export async function lookupOrder(maDonInput: string) {
         ...info,
         tram: tramDisplay,
         vitri: vitriDisplay,
-        tg: info.updatedAt ? new Date(info.updatedAt).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : ""
+        tg: info.updatedAt ? parseDateString(info.updatedAt).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : ""
       },
       logs: formattedLogs,
       missing: missingSteps
@@ -236,7 +247,7 @@ export async function getTrackingReport(startDate?: string, endDate?: string) {
       orders = orders.filter(o => {
         if (!o.updatedAt) return false;
         // Parse the timestamp string (e.g. 2026-04-20T09:54:49+07:00) into a comparable value
-        const orderTime = new Date(o.updatedAt).getTime();
+        const orderTime = parseDateString(o.updatedAt).getTime();
         
         let valid = true;
         if (startDate) {
@@ -287,7 +298,7 @@ export async function getTrackingReport(startDate?: string, endDate?: string) {
                 const cartInfo = cartMap.get(maXe);
                 if (cartInfo && cartInfo.location && !Object.values(TRAM).includes(cartInfo.location as any)) {
                   // If cart is at a shelf (not a station), this is its T4 location
-                  const time = cartInfo.updatedAt ? new Date(cartInfo.updatedAt).toLocaleString('vi-VN', { 
+                  const time = cartInfo.updatedAt ? parseDateString(cartInfo.updatedAt).toLocaleString('vi-VN', { 
                     timeZone: 'Asia/Ho_Chi_Minh',
                     hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit'
                   }) : "N/A";
@@ -299,7 +310,7 @@ export async function getTrackingReport(startDate?: string, endDate?: string) {
           return "";
         }
         
-        const time = new Date(stationLog.timestamp).toLocaleString('vi-VN', { 
+        const time = parseDateString(stationLog.timestamp).toLocaleString('vi-VN', { 
           timeZone: 'Asia/Ho_Chi_Minh',
           hour: '2-digit',
           minute: '2-digit',
