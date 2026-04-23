@@ -1,6 +1,6 @@
 'use server';
 
-import { db, sharedDb } from './db';
+import { db, sharedDb, sharedClient } from './db';
 import { trackingCarts, trackingOrders, trackingLogs } from '@/db/schema';
 import { eq, or, not, inArray } from 'drizzle-orm';
 
@@ -172,7 +172,7 @@ export async function syncOrdersWithMasterData() {
     const codes = pendingOrders.map(o => o.orderCode);
     
     // 3. Truy vấn Master Data (OVN_DATA) theo lô để tối ưu
-    const masterRes = await sharedDb.execute({
+    const masterRes = await sharedClient.execute({
       sql: `SELECT "PRO ORDER" as code, Status FROM OVN_DATA WHERE "PRO ORDER" IN (${codes.map(() => '?').join(',')})`,
       args: codes
     });
