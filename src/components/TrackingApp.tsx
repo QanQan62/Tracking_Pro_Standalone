@@ -17,9 +17,13 @@ import {
   AlertCircle,
   Loader2,
   Download,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 import { processOrders, updateCartPosition, lookupOrder, getTrackingReport } from '@/lib/trackingActions';
+import { useNetworkStatus } from '@/hooks/useNetworkStatus';
+import { getOfflineQueue, addToOfflineQueue, removeFromOfflineQueue } from '@/lib/offlineQueue';
 import * as XLSX from 'xlsx';
 import { TRAM } from '@/lib/constants';
 
@@ -59,6 +63,50 @@ export default function TrackingApp() {
   const [reportToDate, setReportToDate] = useState('');
 
   const [isIOSInApp, setIsIOSInApp] = useState(false);
+  
+  // Offline Sync state
+  const isOnline = useNetworkStatus();
+  const [syncingQueue, setSyncingQueue] = useState(false);
+  const [queueCount, setQueueCount] = useState(0);
+
+  useEffect(() => {
+    setQueueCount(getOfflineQueue().length);
+    if (isOnline && getOfflineQueue().length > 0) {
+      processQueue();
+    }
+  }, [isOnline]);
+
+  const processQueue = async () => {
+    if (syncingQueue) return;
+    const queue = getOfflineQueue();
+    if (queue.length === 0) return;
+
+    setSyncingQueue(true);
+    let successCount = 0;
+
+    for (const action of queue) {
+      try {
+        if (action.type === 'PROCESS_ORDERS') {
+          const { danhSachMa, tramMoi, msnv: reqMsnv, viTriMoi, loaiHang: reqLoaiHang, ghiChu: reqGhiChu } = action.payload;
+          await processOrders(danhSachMa, tramMoi, reqMsnv, viTriMoi, reqLoaiHang, reqGhiChu);
+        } else if (action.type === 'UPDATE_CART_POSITION') {
+          const { maXe, viTriMoi, msnv: reqMsnv } = action.payload;
+          await updateCartPosition(maXe, viTriMoi, reqMsnv);
+        }
+        removeFromOfflineQueue(action.id);
+        successCount++;
+      } catch (error) {
+        console.error("Lỗi đồng bộ offline item:", action.id, error);
+        break; // Stop syncing to try again later if network drops or error occurs
+      }
+    }
+
+    setSyncingQueue(false);
+    setQueueCount(getOfflineQueue().length);
+    if (successCount > 0) {
+      alert(`Đã đồng bộ thành công ${successCount} lượt dữ liệu từ chế độ ngoại tuyến.`);
+    }
+  };
 
   const scannerRef = useRef<any>(null);
   const searchScannerRef = useRef<any>(null);
@@ -372,26 +420,56 @@ export default function TrackingApp() {
   const handleBatchUpdate = async () => {
     setLoading(true);
     if (scanMode === 'MAP_CART_TO_LOC') {
-      const res = await updateCartPosition(tempCartID, tempLocID, msnv);
-      alert(res.message);
-      if (res.success) {
+      if (!isOnline) {
+        addToOfflineQueue({
+          type: 'UPDATE_CART_POSITION',
+          payload: { maXe: tempCartID, viTriMoi: tempLocID, msnv }
+        });
+        setQueueCount(getOfflineQueue().length);
+        alert('Đã lưu dữ liệu vào chế độ ngoại tuyến. Sẽ tự động đồng bộ khi có mạng!');
         setScanMode('WORK_ORDER');
         setTempCartID('');
         setTempLocID('');
         setIsScanningCart(true);
+      } else {
+        const res = await updateCartPosition(tempCartID, tempLocID, msnv);
+        alert(res.message);
+        if (res.success) {
+          setScanMode('WORK_ORDER');
+          setTempCartID('');
+          setTempLocID('');
+          setIsScanningCart(true);
+        }
       }
     } else {
-      const res = await processOrders(scannedCodes, station, msnv, vitri, loaiHang, ghiChu);
-      alert(`Đã xử lý ${res.length} đơn hàng.`);
-      setScannedCodes([]);
-      setVitri('');
-      setGhiChu('');
-      setScanMode('WORK_ORDER');
+      if (!isOnline) {
+        addToOfflineQueue({
+          type: 'PROCESS_ORDERS',
+          payload: { danhSachMa: scannedCodes, tramMoi: station, msnv, viTriMoi: vitri, loaiHang, ghiChu }
+        });
+        setQueueCount(getOfflineQueue().length);
+        alert('Đã lưu dữ liệu vào chế độ ngoại tuyến. Sẽ tự động đồng bộ khi có mạng!');
+        setScannedCodes([]);
+        setVitri('');
+        setGhiChu('');
+        setScanMode('WORK_ORDER');
+      } else {
+        const res = await processOrders(scannedCodes, station, msnv, vitri, loaiHang, ghiChu);
+        alert(`Đã xử lý ${res.length} đơn hàng.`);
+        setScannedCodes([]);
+        setVitri('');
+        setGhiChu('');
+        setScanMode('WORK_ORDER');
+      }
     }
     setLoading(false);
   };
 
   const handleSearch = async () => {
+    if (!isOnline) {
+      alert("Tính năng tra cứu cần có kết nối mạng!");
+      return;
+    }
     if (!searchQuery) return;
     setLoading(true);
     
@@ -406,6 +484,10 @@ export default function TrackingApp() {
   };
 
   const handleFetchReport = async () => {
+    if (!isOnline) {
+      alert("Tính năng báo cáo cần có kết nối mạng!");
+      return;
+    }
     setLoading(true);
     const data = await getTrackingReport(reportFromDate, reportToDate);
     setReportData(data);
@@ -476,7 +558,23 @@ export default function TrackingApp() {
           <Package className="w-6 h-6" />
           TRACKING PRO
         </h1>
-        <div className="flex gap-1">
+        <div className="flex gap-1 items-center">
+           {!isOnline && (
+             <div className="flex items-center gap-1 bg-red-500 px-2 py-1.5 rounded-lg text-xs font-bold mr-1">
+               <WifiOff className="w-3 h-3" />
+             </div>
+           )}
+           {queueCount > 0 && (
+             <button 
+               onClick={processQueue} 
+               disabled={!isOnline || syncingQueue}
+               title="Đồng bộ dữ liệu"
+               className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-bold mr-1 ${isOnline ? 'bg-amber-500 hover:bg-amber-400' : 'bg-slate-500'} transition-colors`}
+             >
+               {syncingQueue ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wifi className="w-3 h-3" />}
+               {queueCount}
+             </button>
+           )}
            <button 
              onClick={() => { stopCamera(); stopSearchCamera(); setScreen('search'); }}
              className="flex items-center gap-1 px-3 py-1.5 hover:bg-blue-600 rounded-lg transition-colors text-sm font-medium"
