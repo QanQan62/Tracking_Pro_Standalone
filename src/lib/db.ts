@@ -7,3 +7,10 @@ const client = createClient({
 });
 
 export const db = drizzle(client);
+
+const sharedClient = createClient({
+  url: process.env.TURSO_SHARED_URL || '',
+  authToken: process.env.TURSO_SHARED_TOKEN || '',
+});
+
+export const sharedDb = drizzle(sharedClient);

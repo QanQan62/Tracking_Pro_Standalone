@@ -97,8 +97,18 @@ export default function TrackingApp() {
   }, []);
 
   const playSound = (type: 'ok' | 'ng') => {
-    if (type === 'ok' && audioOkRef.current) audioOkRef.current.play().catch(() => {});
-    if (type === 'ng' && audioNgRef.current) audioNgRef.current.play().catch(() => {});
+    if (type === 'ok') {
+      if (audioOkRef.current) audioOkRef.current.play().catch(() => {});
+      if (typeof window !== 'undefined' && window.navigator.vibrate) {
+        window.navigator.vibrate(200); // Rung khi quét thành công
+      }
+    }
+    if (type === 'ng') {
+      if (audioNgRef.current) audioNgRef.current.play().catch(() => {});
+      if (typeof window !== 'undefined' && window.navigator.vibrate) {
+        window.navigator.vibrate([100, 50, 100]); // Rung cảnh báo lỗi
+      }
+    }
   };
 
   const stopCamera = async () => {
@@ -133,9 +143,25 @@ export default function TrackingApp() {
     try {
       await html5QrCode.start(
         { facingMode: "environment" },
-        { fps: 15, qrbox: 250 },
-        (decodedText: string) => {
-          handleScan(decodedText);
+        { 
+          fps: 15, 
+          qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
+            const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+            const size = Math.floor(minEdge * 0.8);
+            return { width: size, height: size };
+          },
+          aspectRatio: 1.0
+        },
+        async (decodedText: string) => {
+          // Tạm dừng để xử lý và tránh "khựng" hoặc quét trùng quá nhanh
+          html5QrCode.pause();
+          await handleScan(decodedText);
+          // Chờ 1.5s mới cho quét tiếp để người dùng kịp di chuyển cam
+          setTimeout(() => {
+            if (scannerRef.current) {
+              try { scannerRef.current.resume(); } catch(e) {}
+            }
+          }, 1500);
         },
         () => {}
       );
@@ -155,9 +181,23 @@ export default function TrackingApp() {
     try {
       await html5QrCode.start(
         { facingMode: "environment" },
-        { fps: 15, qrbox: 250 },
-        (decodedText: string) => {
-          handleSearchScan(decodedText);
+        { 
+          fps: 15, 
+          qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
+            const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+            const size = Math.floor(minEdge * 0.8);
+            return { width: size, height: size };
+          },
+          aspectRatio: 1.0
+        },
+        async (decodedText: string) => {
+          html5QrCode.pause();
+          await handleSearchScan(decodedText);
+          setTimeout(() => {
+            if (searchScannerRef.current) {
+              try { searchScannerRef.current.resume(); } catch(e) {}
+            }
+          }, 1500);
         },
         () => {}
       );
@@ -278,6 +318,9 @@ export default function TrackingApp() {
       if (processedCodes.length > 0) {
         playSound('ok');
         setScannedCodes(prev => [...processedCodes, ...prev]);
+      } else if (scannedCodesRef.current.includes(formatOrderCode(cleanText))) {
+        // Thông báo nếu đã quét rồi để tránh hiểu lầm camera bị đứng
+        console.log("Mã này đã có trong danh sách");
       }
     }
   };
@@ -290,6 +333,15 @@ export default function TrackingApp() {
     localStorage.setItem('track_tram', station);
     localStorage.setItem('track_msnv', msnv);
     setScreen('work');
+    
+    // Tự động mở chế độ quét xe cho Trạm 4
+    if (station.includes("Trạm 4")) {
+      setScanMode('MAP_CART_TO_LOC');
+      setTempCartID('');
+      setTempLocID('');
+      setIsScanningCart(true);
+      setTimeout(() => startCamera(), 500);
+    }
   };
 
   const addManualOrder = () => {
@@ -364,6 +416,24 @@ export default function TrackingApp() {
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-20">
+      <style jsx global>{`
+        #reader__status_span, 
+        #search-reader__status_span, 
+        #reader__header_message, 
+        #search-reader__header_message,
+        #reader img[alt="Camera menu"],
+        #search-reader img[alt="Camera menu"],
+        #reader span, 
+        #search-reader span {
+          display: none !important;
+        }
+        #reader, #search-reader {
+          border: none !important;
+        }
+        #reader video, #search-reader video {
+          object-fit: cover !important;
+        }
+      `}</style>
       <audio ref={audioOkRef} src="https://assets.mixkit.co/active_storage/sfx/2578/2578-preview.m4a" />
       <audio ref={audioNgRef} src="https://assets.mixkit.co/active_storage/sfx/2572/2572-preview.m4a" />
 
@@ -467,7 +537,7 @@ export default function TrackingApp() {
             {/* Special Mode: Leanline Cart Assignment */}
             {station.includes("Trạm 4") && (
               <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 space-y-3">
-                <div className="text-xs font-bold text-slate-400 uppercase text-center tracking-wider">Cách 1: Quản lý vị trí xe đẩy</div>
+                <div className="text-xs font-bold text-slate-400 uppercase text-center tracking-wider">Quản lý vị trí xe đẩy</div>
                 <button 
                   onClick={() => {
                     setScanMode('MAP_CART_TO_LOC');
@@ -478,51 +548,45 @@ export default function TrackingApp() {
                   className="w-full bg-slate-800 text-white p-4 rounded-xl flex flex-col items-center gap-1 shadow-md active:scale-95 transition-all"
                 >
                   <Truck className="w-6 h-6" />
-                  <span className="font-bold">NHẬP XE VÀO KỆ (LEANLINE)</span>
+                  <span className="font-bold uppercase text-center">NHẬP XE VÀO VỊ TRÍ (LEANLINE)</span>
                 </button>
               </div>
             )}
 
-            {station.includes("Trạm 4") && (
-              <div className="flex items-center gap-4 my-2">
-                <div className="h-px bg-slate-200 flex-1"></div>
-                <span className="text-xs font-bold text-slate-400 uppercase">Hoặc</span>
-                <div className="h-px bg-slate-200 flex-1"></div>
+            {/* Step Indicator */}
+            {!(station.includes("Trạm 4") && scanMode === 'WORK_ORDER') && (
+              <div className={`py-2 px-4 rounded-full text-center text-sm font-bold shadow-inner ${
+                scanMode === 'WORK_ORDER' ? 'bg-blue-100 text-blue-700' : 
+                scanMode === 'MAP_CART_TO_LOC' ? 'bg-slate-800 text-white' : 'bg-amber-100 text-amber-700'
+              }`}>
+                {scanMode === 'WORK_ORDER' ? 'QUÉT ĐƠN HÀNG' : 
+                 scanMode === 'MAP_CART_TO_LOC' ? 'GÁN XE ➔ VỊ TRÍ' : 'QUÉT VỊ TRÍ 📍'}
+              </div>
+            )}
+            
+            {/* QR Scanner UI - Hidden for Tram 4 in default mode */}
+            {!(station.includes("Trạm 4") && scanMode === 'WORK_ORDER') && (
+              <div 
+                style={{ display: isCameraOn ? 'block' : 'none' }}
+                className="relative overflow-hidden rounded-2xl bg-black shadow-inner"
+              >
+                 <div id="reader" className="w-full"></div>
               </div>
             )}
 
-            {/* Step Indicator */}
-            <div className={`py-2 px-4 rounded-full text-center text-sm font-bold shadow-inner ${
-              scanMode === 'WORK_ORDER' ? 'bg-blue-100 text-blue-700' : 
-              scanMode === 'MAP_CART_TO_LOC' ? 'bg-slate-800 text-white' : 'bg-amber-100 text-amber-700'
-            }`}>
-              {scanMode === 'WORK_ORDER' ? 'BƯỚC 1: QUÉT ĐƠN HÀNG' : 
-               scanMode === 'MAP_CART_TO_LOC' ? 'GÁN XE ➔ VỊ TRÍ KỆ' : 'BƯỚC 2: QUÉT VỊ TRÍ 📍'}
-            </div>
-            
-            {scanMode === 'WORK_ORDER' && station.includes("Trạm 4") && (
-              <div className="text-xs font-bold text-slate-400 uppercase text-center tracking-wider mb-2">Cách 2: Quét đơn hàng trực tiếp</div>
+            {!(station.includes("Trạm 4") && scanMode === 'WORK_ORDER') && (
+              <button 
+                onClick={() => isCameraOn ? stopCamera() : startCamera()}
+                className={`w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${
+                  isCameraOn ? 'bg-red-100 text-red-600' : 'bg-blue-600 text-white'
+                }`}
+              >
+                {isCameraOn ? <><CameraOff className="w-5 h-5" /> TẮT CAMERA</> : <><Camera className="w-5 h-5" /> BẬT CAMERA</>}
+              </button>
             )}
 
-            {/* QR Scanner UI */}
-            <div 
-              style={{ display: isCameraOn ? 'block' : 'none' }}
-              className="relative overflow-hidden rounded-2xl bg-black shadow-inner"
-            >
-               <div id="reader" className="w-full"></div>
-            </div>
-
-            <button 
-              onClick={() => isCameraOn ? stopCamera() : startCamera()}
-              className={`w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${
-                isCameraOn ? 'bg-red-100 text-red-600' : 'bg-blue-600 text-white'
-              }`}
-            >
-              {isCameraOn ? <><CameraOff className="w-5 h-5" /> TẮT CAMERA</> : <><Camera className="w-5 h-5" /> BẬT CAMERA</>}
-            </button>
-
             {/* Controls: Step 1 (Order List) */}
-            {scanMode === 'WORK_ORDER' && (
+            {scanMode === 'WORK_ORDER' && !station.includes("Trạm 4") && (
               <div className="space-y-3 animate-in fade-in duration-300">
                 <div className="flex gap-2">
                   <input 
@@ -552,23 +616,23 @@ export default function TrackingApp() {
                   </ul>
                 </div>
 
-                <div className={`grid ${station.includes("Trạm 4") ? 'grid-cols-1' : 'grid-cols-2'} gap-2`}>
-                   <button 
-                     disabled={scannedCodes.length === 0}
-                     onClick={() => { setScanMode('WORK_LOCATION'); setLocationType('NORMAL'); }}
-                     className="bg-blue-600 text-white py-4 rounded-xl font-bold disabled:opacity-50"
-                   >
-                     ĐƠN ➔ VỊ TRÍ
-                   </button>
-                   {!station.includes("Trạm 4") && (
+                <div className={`grid ${station.includes("Trạm 3") ? 'grid-cols-1' : 'grid-cols-2'} gap-2`}>
+                   {!station.includes("Trạm 3") && (
                      <button 
                        disabled={scannedCodes.length === 0}
-                       onClick={() => { setScanMode('WORK_LOCATION'); setLocationType('CART'); }}
-                       className="bg-slate-800 text-white py-4 rounded-xl font-bold disabled:opacity-50"
+                       onClick={() => { setScanMode('WORK_LOCATION'); setLocationType('NORMAL'); }}
+                       className="bg-blue-600 text-white py-4 rounded-xl font-bold disabled:opacity-50"
                      >
-                       ĐÓNG LÊN XE 🚚
+                       ĐƠN ➔ VỊ TRÍ
                      </button>
                    )}
+                   <button 
+                     disabled={scannedCodes.length === 0}
+                     onClick={() => { setScanMode('WORK_LOCATION'); setLocationType('CART'); }}
+                     className="bg-slate-800 text-white py-4 rounded-xl font-bold disabled:opacity-50"
+                   >
+                     ĐÓNG LÊN XE 🚚
+                   </button>
                 </div>
               </div>
             )}
@@ -585,11 +649,11 @@ export default function TrackingApp() {
                     {!isScanningCart ? (
                       <div className="flex gap-2">
                         <div className={`flex-1 p-4 rounded-xl text-center font-bold flex justify-center items-center ${tempLocID ? 'bg-slate-100 text-slate-400' : 'bg-green-500 text-white'}`}>
-                          {tempLocID ? `📍 KỆ: ${tempLocID}` : '2. QUÉT KỆ 📍'}
+                          {tempLocID ? `📍 VỊ TRÍ: ${tempLocID}` : '2. QUÉT VỊ TRÍ 📍'}
                         </div>
                         <button 
                           onClick={() => {
-                            const val = prompt("Nhập mã kệ:");
+                            const val = prompt("Nhập mã vị trí:");
                             if (val) setTempLocID(formatOrderCode(val));
                           }} 
                           className="bg-slate-200 px-4 rounded-xl font-bold hover:bg-slate-300 active:scale-95 transition-all"
@@ -599,7 +663,7 @@ export default function TrackingApp() {
                       </div>
                     ) : (
                       <div className="p-4 rounded-xl text-center font-bold flex justify-center items-center bg-slate-100 text-slate-300">
-                        2. QUÉT MÃ KỆ 📍
+                        2. QUÉT VỊ TRÍ 📍
                       </div>
                     )}
                   </div>
@@ -627,7 +691,12 @@ export default function TrackingApp() {
                 )}
 
                 <div className="flex gap-2">
-                  <button onClick={() => setScanMode('WORK_ORDER')} className="flex-1 bg-slate-200 py-4 rounded-xl font-bold">QUAY LẠI</button>
+                  <button onClick={() => {
+                    stopCamera();
+                    setScanMode('WORK_ORDER');
+                    setTempCartID('');
+                    setTempLocID('');
+                  }} className="flex-1 bg-slate-200 py-4 rounded-xl font-bold">QUAY LẠI</button>
                   <button 
                     disabled={scanMode === 'MAP_CART_TO_LOC' ? (!tempCartID || !tempLocID) : !vitri}
                     onClick={handleBatchUpdate}
@@ -837,12 +906,6 @@ export default function TrackingApp() {
         )}
       </main>
 
-      {/* Floating Action Hint */}
-      {screen === 'work' && isCameraOn && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-blue-600/90 backdrop-blur text-white px-6 py-2 rounded-full text-xs font-bold flex items-center gap-2 animate-bounce z-[60]">
-          <CheckCircle2 className="w-4 h-4" /> QUÉT MÃ QR ĐỂ TỰ ĐỘNG NHẬN DIỆN
-        </div>
-      )}
     </div>
   );
 }

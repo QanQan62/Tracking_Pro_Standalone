@@ -1,8 +1,8 @@
 'use server';
 
-import { db } from './db';
+import { db, sharedDb } from './db';
 import { trackingCarts, trackingOrders, trackingLogs } from '@/db/schema';
-import { eq, or } from 'drizzle-orm';
+import { eq, or, not, inArray } from 'drizzle-orm';
 
 import { TRAM } from './constants';
 
@@ -157,38 +157,119 @@ export async function processOrders(
   return ketQuaXuLy;
 }
 
+export async function syncOrdersWithMasterData() {
+  const thoiGian = getVNTime();
+  try {
+    // 1. Lấy danh sách đơn hàng trong hệ thống (trừ những đơn đã hoàn thành/vào kho)
+    const orders = await db.select().from(trackingOrders).all();
+    if (orders.length === 0) return;
+
+    // 2. Lọc ra các đơn chưa tới Trạm 4 hoặc Trạm 6 (đã ở T4 thì thôi, hoặc tùy nhu cầu)
+    // Theo yêu cầu: chuyển station thành 4 nếu status >= 6
+    const pendingOrders = orders.filter(o => o.station !== TRAM.T4 && o.station !== TRAM.T6);
+    if (pendingOrders.length === 0) return;
+
+    const codes = pendingOrders.map(o => o.orderCode);
+    
+    // 3. Truy vấn Master Data (OVN_DATA) theo lô để tối ưu
+    const masterRes = await sharedDb.execute({
+      sql: `SELECT "PRO ORDER" as code, Status FROM OVN_DATA WHERE "PRO ORDER" IN (${codes.map(() => '?').join(',')})`,
+      args: codes
+    });
+
+    const statusMap = new Map();
+    masterRes.rows.forEach(row => statusMap.set(row.code, row.Status));
+
+    // 4. Cập nhật những đơn có Status >= 6
+    for (const order of pendingOrders) {
+      const mStatus = statusMap.get(order.orderCode);
+      if (mStatus) {
+        // Lấy số đầu tiên của Status (ví dụ "9.STORED" -> 9, "6.MOLD_OUT" -> 6)
+        const statusNum = parseInt(String(mStatus));
+        if (!isNaN(statusNum) && statusNum >= 6) {
+          await db.update(trackingOrders)
+            .set({
+              station: TRAM.T4,
+              category: "Hàng Khuôn",
+              location: "Đã vào line",
+              updatedAt: thoiGian
+            })
+            .where(eq(trackingOrders.orderCode, order.orderCode));
+
+          await db.insert(trackingLogs).values({
+            timestamp: thoiGian,
+            orderCode: order.orderCode,
+            action: "Auto Sync",
+            fromStation: order.station || "N/A",
+            toStation: TRAM.T4,
+            note: `Đã vào line (Hàng Khuôn) - Master Status: ${mStatus}`
+          });
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Sync error:", error);
+  }
+}
+
 export async function lookupOrder(maDonInput: string) {
   if (!maDonInput) return null;
 
   const tuKhoa = maDonInput.trim().toUpperCase();
   
+  // Tự động sync trước khi tra cứu để có data mới nhất
+  await syncOrdersWithMasterData();
+  
   try {
     const info = await db.select().from(trackingOrders).where(eq(trackingOrders.orderCode, tuKhoa)).get();
     if (!info) return null;
 
-    // LOGIC BẮC CẦU: kiểm tra nếu vị trí đơn đang là một chiếc xe
+    // LOGIC BẮC CẦU: kiểm tra nếu vị trí đơn đang là một hoặc nhiều chiếc xe
     let vitriDisplay = info.location || "";
     let tramDisplay = info.station || "";
 
-    const xeMatch = vitriDisplay.match(/Xe\s*-?\s*(\d+)/i);
-    if (xeMatch) {
-      const maXeScan = `Xe-${xeMatch[1]}`;
-      const cartInfo = await db.select().from(trackingCarts)
-        .where(or(
-          eq(trackingCarts.code, maXeScan),
-          eq(trackingCarts.code, maXeScan.toUpperCase()),
-          eq(trackingCarts.code, maXeScan.replace("Xe-", "Xe - "))
-        ))
-        .get();
+    // Tìm tất cả mã xe trong chuỗi vị trí (ví dụ: "Xe-123, Xe-456")
+    const allXeMatches = vitriDisplay.match(/Xe\s*-?\s*(\d+)/gi);
+    
+    if (allXeMatches && allXeMatches.length > 0) {
+      const resolvedLocations: string[] = [];
+      const cartCodes: string[] = [];
 
-      if (cartInfo && cartInfo.location) {
-        const isStation = Object.values(TRAM).includes(cartInfo.location as any);
-        if (!isStation) {
-          // Xe đã được gán vào vị trí kệ cụ thể (A-03, B-01...) → bridge sang T4
-          tramDisplay = TRAM.T4;
-          vitriDisplay = `${cartInfo.location} (Đang ở trên ${maXeScan})`;
+      for (const rawXe of allXeMatches) {
+        const numMatch = rawXe.match(/\d+/);
+        if (!numMatch) continue;
+        
+        const maXeScan = `Xe-${numMatch[0]}`;
+        cartCodes.push(maXeScan);
+
+        const cartInfo = await db.select().from(trackingCarts)
+          .where(or(
+            eq(trackingCarts.code, maXeScan),
+            eq(trackingCarts.code, maXeScan.toUpperCase()),
+            eq(trackingCarts.code, maXeScan.replace("Xe-", "Xe - "))
+          ))
+          .get();
+
+        if (cartInfo && cartInfo.location) {
+          const isStation = Object.values(TRAM).includes(cartInfo.location as any);
+          if (!isStation) {
+            resolvedLocations.push(`${cartInfo.location} (trên ${maXeScan})`);
+          } else {
+            resolvedLocations.push(maXeScan);
+          }
+        } else {
+          resolvedLocations.push(maXeScan);
         }
-        // Nếu cart.location là tên Trạm → xe chưa được đặt vào kệ → giữ nguyên thông tin gốc của đơn
+      }
+
+      if (resolvedLocations.length > 0) {
+        // Nếu có ít nhất 1 xe đã vào kệ, cập nhật tramDisplay sang T4 (nếu đang ở các trạm sản xuất)
+        if (resolvedLocations.some(l => l.includes(" (trên "))) {
+          if ([TRAM.T3, TRAM.T4].includes(tramDisplay as any)) {
+            tramDisplay = TRAM.T4;
+          }
+        }
+        vitriDisplay = resolvedLocations.join(", ");
       }
     }
 
@@ -240,6 +321,9 @@ export async function lookupOrder(maDonInput: string) {
 }
 
 export async function getTrackingReport(startDate?: string, endDate?: string) {
+  // Sync dữ liệu trước khi chạy báo cáo
+  await syncOrdersWithMasterData();
+
   try {
     let orders = await db.select().from(trackingOrders).all();
     
