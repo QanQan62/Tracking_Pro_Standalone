@@ -58,6 +58,8 @@ export default function TrackingApp() {
   const [reportFromDate, setReportFromDate] = useState('');
   const [reportToDate, setReportToDate] = useState('');
 
+  const [isIOSInApp, setIsIOSInApp] = useState(false);
+
   const scannerRef = useRef<any>(null);
   const searchScannerRef = useRef<any>(null);
   const audioOkRef = useRef<HTMLAudioElement | null>(null);
@@ -82,6 +84,15 @@ export default function TrackingApp() {
   scannedCodesRef.current = scannedCodes;
 
   useEffect(() => {
+    const ua = navigator.userAgent;
+    const isIOS = /iPad|iPhone|iPod/.test(ua);
+    const isZalo = /Zalo/i.test(ua);
+    const isFB = /FBAN|FBAV/i.test(ua);
+    
+    if (isIOS && (isZalo || isFB)) {
+      setIsIOSInApp(true);
+    }
+
     const savedTram = localStorage.getItem('track_tram');
     const savedMsnv = localStorage.getItem('track_msnv');
     if (savedTram) setStation(savedTram);
@@ -436,6 +447,28 @@ export default function TrackingApp() {
       `}</style>
       <audio ref={audioOkRef} src="https://assets.mixkit.co/active_storage/sfx/2578/2578-preview.m4a" />
       <audio ref={audioNgRef} src="https://assets.mixkit.co/active_storage/sfx/2572/2572-preview.m4a" />
+
+      {/* iOS In-App Browser Warning */}
+      {isIOSInApp && (
+        <div className="fixed inset-0 bg-blue-900 z-[200] flex flex-col items-center justify-center p-6 text-white text-center">
+          <div className="bg-white/10 p-8 rounded-3xl backdrop-blur-lg border border-white/20 shadow-2xl">
+            <div className="w-20 h-20 bg-white rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg">
+              <img src="https://upload.wikimedia.org/wikipedia/commons/5/52/Safari_browser_logo.svg" className="w-12 h-12" alt="Safari" />
+            </div>
+            <h2 className="text-2xl font-black mb-4">MỞ BẰNG SAFARI</h2>
+            <p className="text-blue-100 mb-8 leading-relaxed">
+              Trình duyệt của Zalo/Facebook trên iPhone không hỗ trợ Camera. <br/>
+              Vui lòng bấm nút <b>(...)</b> hoặc <b>(Chế độ xem trình duyệt)</b> và chọn <b>Mở bằng Safari</b> để tiếp tục.
+            </p>
+            <button 
+              onClick={() => setIsIOSInApp(false)}
+              className="bg-white text-blue-700 px-8 py-4 rounded-2xl font-bold shadow-xl active:scale-95 transition-all w-full"
+            >
+              TÔI ĐÃ HIỂU
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Header */}
       <header className="bg-blue-700 text-white p-4 shadow-lg sticky top-0 z-50 flex justify-between items-center">
