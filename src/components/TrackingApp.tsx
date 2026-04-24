@@ -267,10 +267,10 @@ export default function TrackingApp() {
   };
 
   const handleSearchScan = async (decodedText: string) => {
-    // Tách các đơn gộp bằng "|", lấy tất cả mã RPRO hợp lệ
+    // Tách các đơn gộp và hậu tố bằng "|"
     const parts = decodedText.trim().toUpperCase().split('|');
     const rproCodes = parts
-      .map(p => formatOrderCode(p.split('^')[0]))
+      .map(p => formatOrderCode(p))
       .filter(c => /^RPRO-\d{6}-\d{4}$/.test(c));
 
     if (rproCodes.length > 0) {
@@ -288,7 +288,7 @@ export default function TrackingApp() {
   };
 
   const formatOrderCode = (raw: string) => {
-    let code = raw.trim().toUpperCase().split('^')[0];
+    let code = raw.trim().toUpperCase();
     
     // Tự động chuẩn hóa tiền tố Xe-
     const upperCode = code.toUpperCase();
@@ -325,22 +325,25 @@ export default function TrackingApp() {
   const handleScan = (decodedText: string) => {
     const now = Date.now();
     const rawText = decodedText.trim().toUpperCase();
-    const cleanText = rawText.split('^')[0];
 
     // Chống quét trùng mã trong 2 giây (De-bounce)
-    if (cleanText === lastScannedCode.current && (now - lastScannedTime.current < 2000)) {
+    if (rawText === lastScannedCode.current && (now - lastScannedTime.current < 2000)) {
       return;
     }
     
-    lastScannedCode.current = cleanText;
+    lastScannedCode.current = rawText;
     lastScannedTime.current = now;
 
+    // Tách bằng | để xử lý đơn gộp và các hậu tố
+    const parts = rawText.split('|');
+
     if (scanModeRef.current === 'MAP_CART_TO_LOC') {
-      const formatted = formatOrderCode(cleanText);
       if (isScanningCartRef.current) {
-        if (/^Xe-\d+$/i.test(formatted)) {
+        // Tìm mã xe hợp lệ trong các phần tách ra
+        const formattedCart = parts.map(p => formatOrderCode(p)).find(f => /^Xe-\d+$/i.test(f));
+        if (formattedCart) {
           playSound('ok');
-          setTempCartID(formatted);
+          setTempCartID(formattedCart);
           setIsScanningCart(false);
           lastScannedCode.current = ''; 
         } else {
@@ -348,38 +351,42 @@ export default function TrackingApp() {
           alert("Vui lòng quét mã Xe (Định dạng: Xe-***)");
         }
       } else {
-        if (formatted !== tempCartIDRef.current) {
+        // Vị trí kệ/lưu trữ lấy phần tử đầu tiên
+        const formattedLoc = formatOrderCode(parts[0]);
+        if (formattedLoc !== tempCartIDRef.current) {
           playSound('ok');
-          setTempLocID(formatted);
+          setTempLocID(formattedLoc);
           stopCamera();
         }
       }
     } else if (scanModeRef.current === 'WORK_LOCATION') {
-      const formatted = formatOrderCode(cleanText);
       if (locationTypeRef.current === 'CART') {
-        if (/^Xe-\d+$/i.test(formatted)) {
+        const formattedCart = parts.map(p => formatOrderCode(p)).find(f => /^Xe-\d+$/i.test(f));
+        if (formattedCart) {
           playSound('ok');
-          setVitri(formatted);
+          setVitri(formattedCart);
         } else {
           playSound('ng');
           alert("Ở chế độ Đóng lên xe, vị trí phải có định dạng Xe-***");
         }
       } else {
+        const formattedLoc = formatOrderCode(parts[0]);
         playSound('ok');
-        setVitri(formatted);
+        setVitri(formattedLoc);
       }
     } else if (scanModeRef.current === 'WORK_ORDER') {
-      const rawCodes = rawText.split('|');
-      const processedCodes = rawCodes
+      const processedCodes = parts
         .map(c => formatOrderCode(c))
         .filter(c => isValidCode(c) && !scannedCodesRef.current.includes(c));
         
       if (processedCodes.length > 0) {
         playSound('ok');
         setScannedCodes(prev => [...processedCodes, ...prev]);
-      } else if (scannedCodesRef.current.includes(formatOrderCode(cleanText))) {
+      } else if (parts.some(p => scannedCodesRef.current.includes(formatOrderCode(p)))) {
         // Thông báo nếu đã quét rồi để tránh hiểu lầm camera bị đứng
         console.log("Mã này đã có trong danh sách");
+      } else {
+        // Có thể play âm thanh lỗi nếu quét không hợp lệ (tuỳ chọn)
       }
     }
   };
@@ -408,7 +415,7 @@ export default function TrackingApp() {
     const rawCodes = manualInput.split('|');
     const processedCodes = rawCodes
       .map(c => formatOrderCode(c))
-      .filter(c => c && !scannedCodes.includes(c));
+      .filter(c => isValidCode(c) && !scannedCodes.includes(c));
     
     if (processedCodes.length > 0) {
       setScannedCodes(prev => [...processedCodes, ...prev]);
@@ -475,7 +482,8 @@ export default function TrackingApp() {
     
     // Áp dụng quy tắc thông minh cho ô Tra cứu
     const rawCodes = searchQuery.split('|');
-    const codeToSearch = formatOrderCode(rawCodes[0]); // Ưu tiên mã đầu tiên nếu là chuỗi gộp
+    const parts = rawCodes.map(c => formatOrderCode(c));
+    const codeToSearch = parts.find(c => isValidCode(c)) || parts[0]; // Ưu tiên mã hợp lệ đầu tiên
     
     setSearchQuery(codeToSearch); // Cập nhật lại ô input để người dùng thấy mã đã chuẩn hóa
     const result = await lookupOrder(codeToSearch);
