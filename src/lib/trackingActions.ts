@@ -166,32 +166,40 @@ export async function syncOrdersWithMasterData() {
 
     // 2. Lọc ra các đơn chưa tới Trạm 4 hoặc Trạm 6 (đã ở T4 thì thôi, hoặc tùy nhu cầu)
     // Theo yêu cầu: chuyển station thành 4 nếu status >= 6
-    const pendingOrders = orders.filter(o => o.station !== TRAM.T4 && o.station !== TRAM.T6);
+    const pendingOrders = orders.filter(o => o.station !== TRAM.T4 && !o.station?.startsWith("Trạm 6"));
     if (pendingOrders.length === 0) return;
 
     const codes = pendingOrders.map(o => o.orderCode);
     
     // 3. Truy vấn Master Data (OVN_DATA) theo lô để tối ưu
     const masterRes = await sharedClient.execute({
-      sql: `SELECT "PRO ORDER" as code, Status FROM OVN_DATA WHERE "PRO ORDER" IN (${codes.map(() => '?').join(',')})`,
+      sql: `SELECT "PRO ORDER" as code, Status, "LINE CODE" as lineCode FROM OVN_DATA WHERE "PRO ORDER" IN (${codes.map(() => '?').join(',')})`,
       args: codes
     });
 
     const statusMap = new Map();
-    masterRes.rows.forEach(row => statusMap.set(row.code, row.Status));
+    masterRes.rows.forEach(row => statusMap.set(row.code, { status: row.Status, lineCode: row.lineCode }));
 
     // 4. Cập nhật những đơn có Status >= 6
     for (const order of pendingOrders) {
-      const mStatus = statusMap.get(order.orderCode);
-      if (mStatus) {
+      const mData = statusMap.get(order.orderCode);
+      if (mData && mData.status) {
         // Lấy số đầu tiên của Status (ví dụ "9.STORED" -> 9, "6.MOLD_OUT" -> 6)
-        const statusNum = parseInt(String(mStatus));
+        const statusNum = parseInt(String(mData.status));
         if (!isNaN(statusNum) && statusNum >= 6) {
+          const lineCode = mData.lineCode ? String(mData.lineCode).trim() : "";
+          const locationText = lineCode ? `Đã vào line ${lineCode}` : "Đã vào line";
+          
+          let newStation = TRAM.T4;
+          if (statusNum > 6) {
+             newStation = lineCode ? `Trạm 6: Kho tạm của ${lineCode}` : `Trạm 6: Kho tạm`;
+          }
+
           await db.update(trackingOrders)
             .set({
-              station: TRAM.T4,
+              station: newStation,
               category: "Hàng Khuôn",
-              location: "Đã vào line",
+              location: locationText,
               updatedAt: thoiGian
             })
             .where(eq(trackingOrders.orderCode, order.orderCode));
@@ -201,8 +209,8 @@ export async function syncOrdersWithMasterData() {
             orderCode: order.orderCode,
             action: "Auto Sync",
             fromStation: order.station || "N/A",
-            toStation: TRAM.T4,
-            note: `Đã vào line (Hàng Khuôn) - Master Status: ${mStatus}`
+            toStation: newStation,
+            note: `${locationText} (Hàng Khuôn) - Master Status: ${mData.status}`
           });
         }
       }
