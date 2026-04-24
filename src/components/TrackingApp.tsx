@@ -113,6 +113,27 @@ export default function TrackingApp() {
   const audioOkRef = useRef<HTMLAudioElement | null>(null);
   const audioNgRef = useRef<HTMLAudioElement | null>(null);
   
+  const manualInputRef = useRef<HTMLInputElement>(null);
+  const vitriInputRef = useRef<HTMLInputElement>(null);
+  const locInputRef = useRef<HTMLInputElement>(null);
+  const cartInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (screen === 'work') {
+      if (scanMode === 'WORK_ORDER') {
+        setTimeout(() => manualInputRef.current?.focus(), 100);
+      } else if (scanMode === 'WORK_LOCATION') {
+        setTimeout(() => vitriInputRef.current?.focus(), 100);
+      } else if (scanMode === 'MAP_CART_TO_LOC') {
+        if (isScanningCart) {
+          setTimeout(() => cartInputRef.current?.focus(), 100);
+        } else {
+          setTimeout(() => locInputRef.current?.focus(), 100);
+        }
+      }
+    }
+  }, [screen, scanMode, isScanningCart]);
+  
   // Cooldown & De-dupe refs
   const lastScannedCode = useRef<string>('');
   const lastScannedTime = useRef<number>(0);
@@ -425,12 +446,21 @@ export default function TrackingApp() {
   };
 
   const handleBatchUpdate = async () => {
-    setLoading(true);
     if (scanMode === 'MAP_CART_TO_LOC') {
+      const formattedCart = formatOrderCode(tempCartID);
+      if (!/^Xe-\d+$/i.test(formattedCart)) {
+        alert("Vui lòng nhập/quét mã Xe hợp lệ (Định dạng: Xe-***)");
+        setTempCartID('');
+        return;
+      }
+      // Định dạng lại vị trí (xóa khoảng trắng, v.v.)
+      const formattedLoc = formatOrderCode(tempLocID);
+      
+      setLoading(true);
       if (!isOnline) {
         addToOfflineQueue({
           type: 'UPDATE_CART_POSITION',
-          payload: { maXe: tempCartID, viTriMoi: tempLocID, msnv }
+          payload: { maXe: formattedCart, viTriMoi: formattedLoc, msnv }
         });
         setQueueCount(getOfflineQueue().length);
         alert('Đã lưu dữ liệu vào chế độ ngoại tuyến. Sẽ tự động đồng bộ khi có mạng!');
@@ -439,7 +469,7 @@ export default function TrackingApp() {
         setTempLocID('');
         setIsScanningCart(true);
       } else {
-        const res = await updateCartPosition(tempCartID, tempLocID, msnv);
+        const res = await updateCartPosition(formattedCart, formattedLoc, msnv);
         alert(res.message);
         if (res.success) {
           setScanMode('WORK_ORDER');
@@ -449,6 +479,16 @@ export default function TrackingApp() {
         }
       }
     } else {
+      if (scanMode === 'WORK_LOCATION' && locationType === 'CART') {
+        const formattedLoc = formatOrderCode(vitri);
+        if (!/^Xe-\d+$/i.test(formattedLoc)) {
+          alert("Ở chế độ Đóng lên xe, vị trí phải có định dạng Xe-***");
+          setVitri('');
+          return;
+        }
+      }
+      
+      setLoading(true);
       if (!isOnline) {
         addToOfflineQueue({
           type: 'PROCESS_ORDERS',
@@ -729,6 +769,7 @@ export default function TrackingApp() {
               <div className="space-y-3 animate-in fade-in duration-300">
                 <div className="flex gap-2">
                   <input 
+                    ref={manualInputRef}
                     type="text"
                     className="flex-1 p-3 rounded-xl border border-slate-200"
                     placeholder="Nhập mã đơn..."
@@ -781,24 +822,54 @@ export default function TrackingApp() {
               <div className="space-y-4 animate-in slide-in-from-right duration-300">
                 {scanMode === 'MAP_CART_TO_LOC' ? (
                   <div className="bg-white p-4 rounded-2xl shadow-inner border-2 border-slate-800 space-y-3">
-                    <div className={`p-4 rounded-xl text-center font-bold flex justify-center items-center ${tempCartID ? 'bg-slate-100 text-slate-400' : 'bg-amber-400 text-black'}`}>
-                      {tempCartID ? `🚚 XE: ${tempCartID}` : '1. QUÉT MÃ XE 🚚'}
-                    </div>
+                    {isScanningCart ? (
+                      <div className="space-y-2">
+                        <div className="text-center font-bold text-amber-500">1. QUÉT MÃ XE 🚚</div>
+                        <input 
+                          ref={cartInputRef}
+                          className="w-full p-4 rounded-xl border-2 border-amber-400 font-bold text-center text-xl bg-white shadow-lg focus:outline-none focus:ring-4 focus:ring-amber-200"
+                          placeholder="Nhập/Quét mã xe..."
+                          value={tempCartID}
+                          onChange={(e) => setTempCartID(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              const formatted = formatOrderCode(tempCartID);
+                              if (/^Xe-\d+$/i.test(formatted)) {
+                                setTempCartID(formatted);
+                                setIsScanningCart(false);
+                                playSound('ok');
+                              } else {
+                                alert("Vui lòng quét mã Xe (Định dạng: Xe-***)");
+                                playSound('ng');
+                                setTempCartID('');
+                              }
+                            }
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <div className="p-4 rounded-xl text-center font-bold flex justify-center items-center bg-slate-100 text-slate-400">
+                        🚚 XE: {tempCartID}
+                      </div>
+                    )}
                     
                     {!isScanningCart ? (
-                      <div className="flex gap-2">
-                        <div className={`flex-1 p-4 rounded-xl text-center font-bold flex justify-center items-center ${tempLocID ? 'bg-slate-100 text-slate-400' : 'bg-green-500 text-white'}`}>
-                          {tempLocID ? `📍 VỊ TRÍ: ${tempLocID}` : '2. QUÉT VỊ TRÍ 📍'}
-                        </div>
-                        <button 
-                          onClick={() => {
-                            const val = prompt("Nhập mã vị trí:");
-                            if (val) setTempLocID(formatOrderCode(val));
-                          }} 
-                          className="bg-slate-200 px-4 rounded-xl font-bold hover:bg-slate-300 active:scale-95 transition-all"
-                        >
-                          TAY
-                        </button>
+                      <div className="space-y-2">
+                        <div className="text-center font-bold text-green-600">2. QUÉT VỊ TRÍ 📍</div>
+                        <input 
+                          ref={locInputRef}
+                          className="w-full p-4 rounded-xl border-2 border-green-500 font-bold text-center text-xl bg-white shadow-lg focus:outline-none focus:ring-4 focus:ring-green-200"
+                          placeholder="Nhập/Quét vị trí..."
+                          value={tempLocID}
+                          onChange={(e) => setTempLocID(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && tempLocID) {
+                              setTempLocID(formatOrderCode(tempLocID));
+                              playSound('ok');
+                              handleBatchUpdate();
+                            }
+                          }}
+                        />
                       </div>
                     ) : (
                       <div className="p-4 rounded-xl text-center font-bold flex justify-center items-center bg-slate-100 text-slate-300">
@@ -813,12 +884,23 @@ export default function TrackingApp() {
                     </div>
                     <div className="flex gap-2">
                        <input 
-                         className="flex-1 p-4 rounded-xl border border-blue-500 font-bold text-center text-xl bg-white shadow-lg"
-                         placeholder="Vị trí..."
+                         ref={vitriInputRef}
+                         className="flex-1 p-4 rounded-xl border-2 border-blue-500 font-bold text-center text-xl bg-white shadow-lg focus:outline-none focus:ring-4 focus:ring-blue-200"
+                         placeholder="Nhập/Quét vị trí..."
                          value={vitri}
-                         readOnly
+                         onChange={(e) => setVitri(e.target.value)}
+                         onKeyDown={(e) => {
+                           if (e.key === 'Enter') {
+                             if (locationType === 'CART' && !/^Xe-\d+$/i.test(formatOrderCode(vitri))) {
+                               alert("Ở chế độ Đóng lên xe, vị trí phải có định dạng Xe-***");
+                               setVitri('');
+                               return;
+                             }
+                             setVitri(formatOrderCode(vitri));
+                             handleBatchUpdate();
+                           }
+                         }}
                        />
-                       <button onClick={() => setVitri(prompt("Nhập vị trí:") || "")} className="bg-slate-200 px-4 rounded-xl font-bold">TAY</button>
                     </div>
                     <input 
                       className="w-full p-3 rounded-xl border border-slate-200"
