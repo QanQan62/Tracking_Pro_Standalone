@@ -190,7 +190,7 @@ export async function syncOrdersWithMasterData() {
           const lineCode = mData.lineCode ? String(mData.lineCode).trim() : "";
           const locationText = lineCode ? `Đã vào line ${lineCode}` : "Đã vào line";
           
-          let newStation = TRAM.T4;
+          let newStation: string = TRAM.T4;
           if (statusNum > 6) {
              newStation = lineCode ? `Trạm 6: Kho tạm của ${lineCode}` : `Trạm 6: Kho tạm`;
           }
