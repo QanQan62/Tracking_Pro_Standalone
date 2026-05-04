@@ -540,7 +540,6 @@ export default function TrackingApp() {
     const data = await getTrackingReport(reportFromDate, reportToDate);
     setReportData(data);
     setLoading(false);
-    setScreen('report');
   };
 
   const downloadExcel = () => {
@@ -629,12 +628,12 @@ export default function TrackingApp() {
            >
              <Search className="w-4 h-4" /> Tra cứu
            </button>
-           <button 
-             onClick={handleFetchReport}
-             className="flex items-center gap-1 px-3 py-1.5 hover:bg-blue-600 rounded-lg transition-colors text-sm font-medium"
-           >
-             <FileSpreadsheet className="w-4 h-4" /> Báo cáo
-           </button>
+            <button 
+              onClick={() => { stopCamera(); stopSearchCamera(); setScreen('report'); setReportData([]); }}
+              className="flex items-center gap-1 px-3 py-1.5 hover:bg-blue-600 rounded-lg transition-colors text-sm font-medium"
+            >
+              <FileSpreadsheet className="w-4 h-4" /> Báo cáo
+            </button>
            {screen !== 'setup' ? (
              <button 
                onClick={() => { stopCamera(); stopSearchCamera(); setScreen('setup'); }}
