@@ -158,6 +158,9 @@ export async function processOrders(
 }
 
 export async function syncOrdersWithMasterData() {
+  // ALWAYS DEACTIVATED FOR TESTING HIGH READS
+  return;
+  
   const thoiGian = getVNTime();
   try {
     // 1. Lấy danh sách đơn hàng trong hệ thống (trừ những đơn đã hoàn thành/vào kho)

@@ -9,8 +9,8 @@ const client = createClient({
 export const db = drizzle(client);
 
 export const sharedClient = createClient({
-  url: process.env.TURSO_SHARED_URL || '',
-  authToken: process.env.TURSO_SHARED_TOKEN || '',
+  url: 'file:./dummy_shared.db',
+  authToken: '',
 });
 
 export const sharedDb = drizzle(sharedClient);
