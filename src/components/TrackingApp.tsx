@@ -19,12 +19,14 @@ import {
   Download,
   FileSpreadsheet,
   Wifi,
-  WifiOff
+  WifiOff,
+  BarChart
 } from 'lucide-react';
-import { processOrders, updateCartPosition, lookupOrder, getTrackingReport } from '@/lib/trackingActions';
+import { processOrders, updateCartPosition, lookupOrder, getTrackingReport, getDashboardStats } from '@/lib/trackingActions';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus';
 import { getOfflineQueue, addToOfflineQueue, removeFromOfflineQueue } from '@/lib/offlineQueue';
 import * as XLSX from 'xlsx';
+import { BarChart as RechartsBarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
 import { TRAM } from '@/lib/constants';
 
 declare global {
@@ -34,7 +36,7 @@ declare global {
 }
 
 export default function TrackingApp() {
-  const [screen, setScreen] = useState<'setup' | 'work' | 'search' | 'report'>('setup');
+  const [screen, setScreen] = useState<'setup' | 'work' | 'search' | 'report' | 'dashboard'>('setup');
   const [station, setStation] = useState('');
   const [msnv, setMsnv] = useState('');
   const [scannedCodes, setScannedCodes] = useState<string[]>([]);
@@ -61,6 +63,11 @@ export default function TrackingApp() {
   const [reportData, setReportData] = useState<any[]>([]);
   const [reportFromDate, setReportFromDate] = useState('');
   const [reportToDate, setReportToDate] = useState('');
+
+  // Dashboard state
+  const [dashboardData, setDashboardData] = useState<any[] | null>(null);
+  const [dashboardFromDate, setDashboardFromDate] = useState('');
+  const [dashboardToDate, setDashboardToDate] = useState('');
 
   const [isIOSInApp, setIsIOSInApp] = useState(false);
   
@@ -312,35 +319,76 @@ export default function TrackingApp() {
     let code = raw.trim().toUpperCase();
     
     // Tự động chuẩn hóa tiền tố Xe-
-    const upperCode = code.toUpperCase();
-    if (/^XE\s*-?\s*\d+$/.test(upperCode)) {
+    if (/^XE\s*-?\s*\d+$/.test(code)) {
       const numMatch = code.match(/\d+/);
       return numMatch ? `Xe-${numMatch[0]}` : code;
     }
 
-    // Luôn bắt đầu bằng RPRO- cho đơn hàng
+    // === Các pattern chuẩn (scan đúng hoàn toàn) ===
+    // RPRO-xxxxxx-xxxx (hoàn hảo)
+    if (/^RPRO-\d{6}-\d{4}$/.test(code)) return code;
+    // 10 số liên tiếp
     if (/^\d{10}$/.test(code)) {
       return `RPRO-${code.slice(0, 6)}-${code.slice(6, 10)}`;
     }
+    // xxxxxx-xxxx (6-4 có gạch)
     if (/^\d{6}-\d{4}$/.test(code)) {
       return `RPRO-${code}`;
     }
+    // RPRO + 10 số (thiếu gạch)
     if (/^RPRO\d{10}$/.test(code)) {
       return `RPRO-${code.slice(4, 10)}-${code.slice(10, 14)}`;
     }
+    // RPRO- + 10 số (thiếu gạch giữa)
     if (/^RPRO-\d{10}$/.test(code)) {
       return `RPRO-${code.slice(5, 11)}-${code.slice(11, 15)}`;
     }
+    // RPRO + xxxxxx-xxxx (thiếu gạch đầu)
     if (/^RPRO\d{6}-\d{4}$/.test(code)) {
       return `RPRO-${code.slice(4)}`;
+    }
+
+    // === Xử lý scanner delay: RPR bị mất chữ O ===
+    // RPR-xxxxxx-xxxx
+    if (/^RPR-\d{6}-\d{4}$/.test(code)) {
+      return `RPRO-${code.slice(4)}`;
+    }
+    // RPR + xxxxxx-xxxx (thiếu O, thiếu gạch đầu)
+    if (/^RPR\d{6}-\d{4}$/.test(code)) {
+      return `RPRO-${code.slice(3)}`;
+    }
+    // RPR + 10 số (thiếu O, không gạch)
+    if (/^RPR\d{10}$/.test(code)) {
+      return `RPRO-${code.slice(3, 9)}-${code.slice(9, 13)}`;
+    }
+
+    // === Fallback an toàn: tìm pattern xxxxxx-xxxx sau prefix RPR ===
+    if (code.includes('RPR')) {
+      const rprIdx = code.indexOf('RPR');
+      let afterIdx = rprIdx + 3; // sau "RPR"
+      // Bỏ qua ký tự O hoặc 0 (scanner đọc O thành 0)
+      if (code[afterIdx] === 'O' || code[afterIdx] === '0') afterIdx++;
+      // Bỏ qua dấu gạch ngang
+      if (code[afterIdx] === '-') afterIdx++;
+      
+      const remaining = code.substring(afterIdx);
+      // Tìm pattern xxxxxx-xxxx trong phần còn lại (giữ nguyên vị trí số)
+      const dashMatch = remaining.match(/(\d{6})-(\d{4})/);
+      if (dashMatch) return `RPRO-${dashMatch[1]}-${dashMatch[2]}`;
+      
+      // Tìm đúng 10 số liên tiếp
+      const digitsAfter = remaining.replace(/\D/g, '');
+      if (digitsAfter.length === 10) {
+        return `RPRO-${digitsAfter.slice(0, 6)}-${digitsAfter.slice(6, 10)}`;
+      }
     }
     
     return code;
   };
 
-  const isValidCode = (code: string) => {
-    // Chấp nhận RPRO-xxxxxx-xxxx hoặc Xe-xxxx
-    return /^RPRO-\d{6}-\d{4}$/.test(code) || /^Xe-\d+$/i.test(code);
+  const isValidOrderCode = (code: string) => {
+    // Chỉ chấp nhận RPRO-xxxxxx-xxxx cho đơn hàng
+    return /^RPRO-\d{6}-\d{4}$/.test(code);
   };
 
   const handleScan = (decodedText: string) => {
@@ -356,7 +404,9 @@ export default function TrackingApp() {
     lastScannedTime.current = now;
 
     // Tách bằng | để xử lý đơn gộp và các hậu tố
-    const parts = rawText.split('|');
+    // Đồng thời tách RPR để đề phòng lỗi dính liền khi scan
+    const normalizedText = rawText.replace(/RPR/g, '|RPR');
+    const parts = normalizedText.split('|').map(p => p.trim()).filter(Boolean);
 
     if (scanModeRef.current === 'MAP_CART_TO_LOC') {
       if (isScanningCartRef.current) {
@@ -398,7 +448,7 @@ export default function TrackingApp() {
     } else if (scanModeRef.current === 'WORK_ORDER') {
       const processedCodes = parts
         .map(c => formatOrderCode(c))
-        .filter(c => isValidCode(c) && !scannedCodesRef.current.includes(c));
+        .filter(c => isValidOrderCode(c) && !scannedCodesRef.current.includes(c));
         
       if (processedCodes.length > 0) {
         playSound('ok');
@@ -436,7 +486,7 @@ export default function TrackingApp() {
     const rawCodes = manualInput.split('|');
     const processedCodes = rawCodes
       .map(c => formatOrderCode(c))
-      .filter(c => isValidCode(c) && !scannedCodes.includes(c));
+      .filter(c => isValidOrderCode(c) && !scannedCodes.includes(c));
     
     if (processedCodes.length > 0) {
       setScannedCodes(prev => [...processedCodes, ...prev]);
@@ -523,7 +573,7 @@ export default function TrackingApp() {
     // Áp dụng quy tắc thông minh cho ô Tra cứu
     const rawCodes = searchQuery.split('|');
     const parts = rawCodes.map(c => formatOrderCode(c));
-    const codeToSearch = parts.find(c => isValidCode(c)) || parts[0]; // Ưu tiên mã hợp lệ đầu tiên
+    const codeToSearch = parts.find(c => isValidOrderCode(c) || /^Xe-\d+$/i.test(c)) || parts[0]; // Ưu tiên mã hợp lệ đầu tiên
     
     setSearchQuery(codeToSearch); // Cập nhật lại ô input để người dùng thấy mã đã chuẩn hóa
     const result = await lookupOrder(codeToSearch);
@@ -540,6 +590,26 @@ export default function TrackingApp() {
     const data = await getTrackingReport(reportFromDate, reportToDate);
     setReportData(data);
     setLoading(false);
+  };
+
+  const handleFetchDashboard = async () => {
+    if (!isOnline) {
+      alert("Tính năng dashboard cần có kết nối mạng!");
+      return;
+    }
+    setLoading(true);
+    const data = await getDashboardStats(dashboardFromDate, dashboardToDate);
+    setDashboardData(data);
+    setLoading(false);
+  };
+
+  const shiftDashboardDate = (days: number) => {
+    if (!dashboardFromDate) return;
+    const d = new Date(dashboardFromDate);
+    d.setDate(d.getDate() + days);
+    const dateStr = d.toISOString().split('T')[0];
+    setDashboardFromDate(dateStr);
+    setDashboardToDate(dateStr);
   };
 
   const downloadExcel = () => {
@@ -628,6 +698,12 @@ export default function TrackingApp() {
            >
              <Search className="w-4 h-4" /> Tra cứu
            </button>
+            <button 
+              onClick={() => { stopCamera(); stopSearchCamera(); setScreen('dashboard'); }}
+              className="flex items-center gap-1 px-3 py-1.5 hover:bg-blue-600 rounded-lg transition-colors text-sm font-medium"
+            >
+              <BarChart className="w-4 h-4" /> Dashboard
+            </button>
             <button 
               onClick={() => { stopCamera(); stopSearchCamera(); setScreen('report'); setReportData([]); }}
               className="flex items-center gap-1 px-3 py-1.5 hover:bg-blue-600 rounded-lg transition-colors text-sm font-medium"
@@ -1116,6 +1192,70 @@ export default function TrackingApp() {
               </div>
             </div>
             
+            <button 
+              onClick={() => setScreen(station ? 'work' : 'setup')}
+              className="w-full bg-slate-200 py-4 rounded-xl font-bold hover:bg-slate-300 transition-colors mb-10"
+            >
+              QUAY LẠI
+            </button>
+          </div>
+        )}
+      {/* Screen: Dashboard */}
+        {screen === 'dashboard' && (
+          <div className="space-y-4 animate-in fade-in duration-500">
+            <div className="bg-white p-6 rounded-2xl shadow-xl border border-slate-100 flex flex-col gap-4">
+              <h2 className="text-2xl font-bold text-slate-800 text-center flex items-center justify-center gap-2">
+                <BarChart className="w-6 h-6 text-blue-600" />
+                Dashboard
+              </h2>
+              
+              <div className="flex gap-2 items-center flex-wrap">
+                <div className="flex gap-1 items-center bg-slate-50 p-1 rounded-xl border border-slate-200">
+                  <button onClick={() => shiftDashboardDate(-1)} className="px-3 py-2 hover:bg-white rounded-lg transition-colors font-bold text-slate-500">&lt;</button>
+                  <input 
+                    type="date"
+                    className="p-2 rounded-lg border-none focus:ring-0 bg-transparent text-sm font-semibold w-[130px]"
+                    value={dashboardFromDate}
+                    onChange={(e) => setDashboardFromDate(e.target.value)}
+                  />
+                  <button onClick={() => shiftDashboardDate(1)} className="px-3 py-2 hover:bg-white rounded-lg transition-colors font-bold text-slate-500">&gt;</button>
+                </div>
+                <span className="text-slate-400 font-bold text-xs uppercase">ĐẾN</span>
+                <input 
+                  type="date"
+                  className="p-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 text-sm font-semibold w-[130px]"
+                  value={dashboardToDate}
+                  onChange={(e) => setDashboardToDate(e.target.value)}
+                />
+                <button 
+                  onClick={handleFetchDashboard}
+                  disabled={loading}
+                  className="bg-blue-600 text-white px-4 py-2 rounded-xl font-bold hover:bg-blue-700 transition-colors flex items-center justify-center flex-1 min-w-[80px]"
+                >
+                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "XEM"}
+                </button>
+              </div>
+              
+              {dashboardData && (
+                <div className="mt-4 h-72 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <RechartsBarChart data={dashboardData} margin={{ top: 10, right: 10, left: -20, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                      <XAxis dataKey="name" tick={{fontSize: 10, fill: '#64748b'}} axisLine={false} tickLine={false} interval={0} />
+                      <YAxis tick={{fontSize: 12, fill: '#64748b'}} axisLine={false} tickLine={false} />
+                      <Tooltip cursor={{fill: '#f1f5f9'}} contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
+                      <Bar dataKey="value" radius={[6, 6, 0, 0]} barSize={40}>
+                        {dashboardData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.fill} />
+                        ))}
+                        <LabelList dataKey="value" position="top" fill="#475569" fontSize={12} fontWeight="bold" />
+                      </Bar>
+                    </RechartsBarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+
             <button 
               onClick={() => setScreen(station ? 'work' : 'setup')}
               className="w-full bg-slate-200 py-4 rounded-xl font-bold hover:bg-slate-300 transition-colors mb-10"

@@ -164,9 +164,9 @@ export async function syncOrdersWithMasterData() {
     const orders = await db.select().from(trackingOrders).all();
     if (orders.length === 0) return;
 
-    // 2. Lọc ra các đơn chưa tới Trạm 4 hoặc Trạm 6 (đã ở T4 thì thôi, hoặc tùy nhu cầu)
-    // Theo yêu cầu: chuyển station thành 4 nếu status >= 6
-    const pendingOrders = orders.filter(o => o.station !== TRAM.T4 && !o.station?.startsWith("Trạm 6"));
+    // 2. Lọc ra các đơn chưa tới Trạm 6
+    // Include T4 so they can move to T6 (status >= 6)
+    const pendingOrders = orders.filter(o => !o.station?.startsWith("Trạm 6"));
     if (pendingOrders.length === 0) return;
 
     const codes = pendingOrders.map(o => o.orderCode);
@@ -195,24 +195,47 @@ export async function syncOrdersWithMasterData() {
              newStation = lineCode ? `Trạm 6: Kho tạm của ${lineCode}` : `Trạm 6: Kho tạm`;
           }
 
-          await db.update(trackingOrders)
-            .set({
-              station: newStation,
-              category: "Hàng Khuôn",
-              location: locationText,
-              updatedAt: thoiGian
-            })
-            .where(eq(trackingOrders.orderCode, order.orderCode));
+          if (order.station !== newStation || order.location !== locationText) {
+            await db.update(trackingOrders)
+              .set({
+                station: newStation,
+                category: "Hàng Khuôn",
+                location: locationText,
+                updatedAt: thoiGian
+              })
+              .where(eq(trackingOrders.orderCode, order.orderCode));
 
-          await db.insert(trackingLogs).values({
-            timestamp: thoiGian,
-            orderCode: order.orderCode,
-            action: "Auto Sync",
-            fromStation: order.station || "N/A",
-            toStation: newStation,
-            note: `${locationText} (Hàng Khuôn) - Master Status: ${mData.status}`
-          });
+            await db.insert(trackingLogs).values({
+              timestamp: thoiGian,
+              orderCode: order.orderCode,
+              action: "Auto Sync",
+              fromStation: order.station || "N/A",
+              toStation: newStation,
+              note: `${locationText} (Hàng Khuôn) - Master Status: ${mData.status}`
+            });
+          }
         }
+      } else if (!mData && order.station === TRAM.T4) {
+        // Nếu đơn ở Trạm 4 nhưng KHÔNG có trong master data -> mặc định là 9 (STORED)
+        const newStation = `Trạm 6: Kho tạm`;
+        const locationText = "Đã vào line";
+        
+        await db.update(trackingOrders)
+          .set({
+             station: newStation,
+             location: locationText,
+             updatedAt: thoiGian
+          })
+          .where(eq(trackingOrders.orderCode, order.orderCode));
+
+        await db.insert(trackingLogs).values({
+          timestamp: thoiGian,
+          orderCode: order.orderCode,
+          action: "Auto Sync",
+          fromStation: order.station || "N/A",
+          toStation: newStation,
+          note: `${locationText} (Hàng Khuôn) - Master Status: assumed 9 (Stored)`
+        });
       }
     }
   } catch (error) {
@@ -260,7 +283,17 @@ export async function lookupOrder(maDonInput: string) {
 
         if (cartInfo && cartInfo.location) {
           const isStation = Object.values(TRAM).includes(cartInfo.location as any);
-          if (!isStation) {
+          
+          let isValidCartLocation = true;
+          if (cartInfo.updatedAt && info.updatedAt) {
+             const cartTime = parseDateString(cartInfo.updatedAt).getTime();
+             const orderTime = parseDateString(info.updatedAt).getTime();
+             if (cartTime < orderTime) {
+                isValidCartLocation = false;
+             }
+          }
+
+          if (!isStation && isValidCartLocation) {
             resolvedLocations.push(`${cartInfo.location} (trên ${maXeScan})`);
           } else {
             resolvedLocations.push(maXeScan);
@@ -389,12 +422,22 @@ export async function getTrackingReport(startDate?: string, endDate?: string) {
                 const maXe = `Xe-${xeMatch[1]}`;
                 const cartInfo = cartMap.get(maXe);
                 if (cartInfo && cartInfo.location && !Object.values(TRAM).includes(cartInfo.location as any)) {
-                  // If cart is at a shelf (not a station), this is its T4 location
-                  const time = cartInfo.updatedAt ? parseDateString(cartInfo.updatedAt).toLocaleString('vi-VN', { 
-                    timeZone: 'Asia/Ho_Chi_Minh',
-                    hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit'
-                  }) : "N/A";
-                  return `${cartInfo.location} (Xe: ${maXe}) - ${time}`;
+                  let isValidCartLocation = true;
+                  if (cartInfo.updatedAt && t3Log.timestamp) {
+                     const cartTime = parseDateString(cartInfo.updatedAt).getTime();
+                     const logTime = parseDateString(t3Log.timestamp).getTime();
+                     if (cartTime < logTime) {
+                        isValidCartLocation = false;
+                     }
+                  }
+                  if (isValidCartLocation) {
+                    const time = cartInfo.updatedAt ? parseDateString(cartInfo.updatedAt).toLocaleString('vi-VN', { 
+                      timeZone: 'Asia/Ho_Chi_Minh',
+                      hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric'
+                    }) : "N/A";
+                    const byStr = cartInfo.updatedBy ? ` (bởi ${cartInfo.updatedBy})` : "";
+                    return `${cartInfo.location} (Xe: ${maXe})${byStr} - ${time}`;
+                  }
                 }
               }
             }
@@ -450,4 +493,48 @@ export async function getTrackingReport(startDate?: string, endDate?: string) {
     console.error("Report error:", error);
     return [];
   }
+}
+
+export async function getDashboardStats(fromDateStr?: string, toDateStr?: string) {
+  await syncOrdersWithMasterData();
+
+  const vnTimeFull = getVNTime(); 
+  const targetDateFrom = fromDateStr || vnTimeFull.substring(0, 10);
+  const targetDateTo = toDateStr || targetDateFrom;
+  
+  const logs = await db.select().from(trackingLogs).all();
+  
+  const lenXeSet = new Set<string>();
+  const vaoViTriSet = new Set<string>();
+  const t4VaoViTriSet = new Set<string>();
+  const t4VaoLineSet = new Set<string>();
+
+  logs.forEach(log => {
+    const logDate = parseDateString(log.timestamp).toLocaleString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }).substring(0, 10);
+    if (logDate < targetDateFrom || logDate > targetDateTo) return;
+
+    const isT4OrT6 = log.toStation === TRAM.T4 || log.toStation?.startsWith("Trạm 6");
+    const isLine = log.action === "Auto Sync" || (log.note && log.note.includes("Đã vào line"));
+
+    if (isT4OrT6) {
+      if (isLine) {
+        t4VaoLineSet.add(log.orderCode);
+      } else {
+        t4VaoViTriSet.add(log.orderCode);
+      }
+    }
+
+    if (log.note && log.note.match(/Xe\s*-?\s*\d+/i)) {
+      lenXeSet.add(log.orderCode);
+    } else if (!isLine) {
+      vaoViTriSet.add(log.orderCode);
+    }
+  });
+
+  return [
+    { name: 'Quét lên xe', value: lenXeSet.size, fill: '#3b82f6' },
+    { name: 'Vào vị trí (T1-T6)', value: vaoViTriSet.size, fill: '#f59e0b' },
+    { name: 'T4: Vào vị trí', value: t4VaoViTriSet.size, fill: '#10b981' },
+    { name: 'T4: Vào line (Auto)', value: t4VaoLineSet.size, fill: '#8b5cf6' }
+  ];
 }
