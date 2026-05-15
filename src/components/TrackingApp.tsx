@@ -20,7 +20,8 @@ import {
   FileSpreadsheet,
   Wifi,
   WifiOff,
-  BarChart
+  BarChart,
+  Barcode
 } from 'lucide-react';
 import { processOrders, updateCartPosition, lookupOrder, getTrackingReport, getDashboardStats } from '@/lib/trackingActions';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus';
@@ -42,7 +43,7 @@ export default function TrackingApp() {
   const [scannedCodes, setScannedCodes] = useState<string[]>([]);
   const [manualInput, setManualInput] = useState('');
   const [isCameraOn, setIsCameraOn] = useState(false);
-  const [scanMode, setScanMode] = useState<'WORK_ORDER' | 'WORK_LOCATION' | 'MAP_CART_TO_LOC'>('WORK_ORDER');
+  const [scanMode, setScanMode] = useState<'WORK_ORDER' | 'WORK_LOCATION' | 'MAP_CART_TO_LOC' | 'BATCH_SCAN_CART_LOC'>('WORK_ORDER');
   const [locationType, setLocationType] = useState<'NORMAL' | 'CART'>('NORMAL');
   const [vitri, setVitri] = useState('');
   const [loaiHang, setLoaiHang] = useState('Hàng Khuôn');
@@ -53,6 +54,11 @@ export default function TrackingApp() {
   const [tempCartID, setTempCartID] = useState('');
   const [tempLocID, setTempLocID] = useState('');
   const [isScanningCart, setIsScanningCart] = useState(true);
+
+  // Batch scan state
+  const [batchScanData, setBatchScanData] = useState('');
+  const [isProcessingBatch, setIsProcessingBatch] = useState(false);
+  const batchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -389,6 +395,78 @@ export default function TrackingApp() {
   const isValidOrderCode = (code: string) => {
     // Chỉ chấp nhận RPRO-xxxxxx-xxxx cho đơn hàng
     return /^RPRO-\d{6}-\d{4}$/.test(code);
+  };
+
+  const processBatchScanData = async (dataToProcess?: string) => {
+    const rawData = dataToProcess !== undefined ? dataToProcess : batchScanData;
+    if (!rawData.trim()) return;
+    if (isProcessingBatch) return;
+
+    setIsProcessingBatch(true);
+    const lines = rawData.split('\n').map(l => l.trim()).filter(Boolean);
+    
+    const tasks: { cart: string, loc: string }[] = [];
+    let pendingCarts: string[] = [];
+
+    for (const line of lines) {
+      const formatted = formatOrderCode(line);
+      if (/^Xe-\d+$/i.test(formatted)) {
+        pendingCarts.push(formatted);
+      } else {
+        const loc = formatted;
+        for (const cart of pendingCarts) {
+          tasks.push({ cart, loc });
+        }
+        pendingCarts = []; 
+      }
+    }
+
+    if (tasks.length === 0) {
+      if (pendingCarts.length > 0) {
+        alert("Dữ liệu chỉ có Xe, không có mã Vị trí nào để gắn!");
+      } else {
+        alert("Không nhận diện được định dạng Xe và Vị trí nào hợp lệ.");
+      }
+      setIsProcessingBatch(false);
+      return;
+    }
+
+    let successCount = 0;
+    
+    if (!isOnline) {
+      for (const t of tasks) {
+        addToOfflineQueue({
+          type: 'UPDATE_CART_POSITION',
+          payload: { maXe: t.cart, viTriMoi: t.loc, msnv }
+        });
+      }
+      setQueueCount(getOfflineQueue().length);
+      alert(`[OFFLINE] Đã lưu ${tasks.length} lượt gán xe vào hàng đợi.`);
+    } else {
+      for (const t of tasks) {
+        try {
+          const res = await updateCartPosition(t.cart, t.loc, msnv);
+          if (res.success) successCount++;
+        } catch (e) {
+          console.error("Lỗi gán xe:", t, e);
+        }
+      }
+      alert(`Đã gán thành công ${successCount}/${tasks.length} xe vào vị trí.`);
+    }
+
+    setBatchScanData('');
+    setIsProcessingBatch(false);
+    playSound('ok');
+  };
+
+  const handleBatchDebounce = (val: string) => {
+    setBatchScanData(val);
+    if (batchTimeoutRef.current) clearTimeout(batchTimeoutRef.current);
+    if (val.trim() !== '') {
+      batchTimeoutRef.current = setTimeout(() => {
+        processBatchScanData(val);
+      }, 1500);
+    }
   };
 
   const handleScan = (decodedText: string) => {
@@ -792,17 +870,37 @@ export default function TrackingApp() {
             {station.includes("Trạm 4") && (
               <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 space-y-3">
                 <div className="text-xs font-bold text-slate-400 uppercase text-center tracking-wider">Quản lý vị trí xe đẩy</div>
+                
                 <button 
                   onClick={() => {
+                    stopCamera();
+                    setScanMode('BATCH_SCAN_CART_LOC');
+                    setBatchScanData('');
+                  }}
+                  className="w-full bg-blue-600 text-white p-4 rounded-xl flex flex-col items-center gap-1 shadow-md active:scale-95 transition-all border-2 border-blue-400"
+                >
+                  <Barcode className="w-6 h-6" />
+                  <span className="font-bold uppercase text-center">SCAN VỊ TRÍ BẰNG MÁY SCAN</span>
+                </button>
+
+                <div className="flex items-center gap-2 py-1">
+                  <div className="h-px bg-slate-200 flex-1"></div>
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Hoặc</span>
+                  <div className="h-px bg-slate-200 flex-1"></div>
+                </div>
+
+                <button 
+                  onClick={() => {
+                    stopCamera();
                     setScanMode('MAP_CART_TO_LOC');
                     setTempCartID('');
                     setTempLocID('');
                     setIsScanningCart(true);
                   }}
-                  className="w-full bg-slate-800 text-white p-4 rounded-xl flex flex-col items-center gap-1 shadow-md active:scale-95 transition-all"
+                  className="w-full bg-slate-800 text-white p-3 rounded-xl flex flex-col items-center gap-1 shadow-md active:scale-95 transition-all"
                 >
-                  <Truck className="w-6 h-6" />
-                  <span className="font-bold uppercase text-center">NHẬP XE VÀO VỊ TRÍ (LEANLINE)</span>
+                  <Camera className="w-5 h-5 text-slate-300" />
+                  <span className="text-sm font-bold uppercase text-center text-slate-200">Nhập thủ công / Camera điện thoại</span>
                 </button>
               </div>
             )}
@@ -893,9 +991,33 @@ export default function TrackingApp() {
             )}
 
             {/* Controls: Step 2 (Location / Mapping) */}
-            {(scanMode === 'WORK_LOCATION' || scanMode === 'MAP_CART_TO_LOC') && (
+            {(scanMode === 'WORK_LOCATION' || scanMode === 'MAP_CART_TO_LOC' || scanMode === 'BATCH_SCAN_CART_LOC') && (
               <div className="space-y-4 animate-in slide-in-from-right duration-300">
-                {scanMode === 'MAP_CART_TO_LOC' ? (
+                {scanMode === 'BATCH_SCAN_CART_LOC' ? (
+                  <div className="bg-white p-4 rounded-2xl shadow-inner border-2 border-blue-500 space-y-3">
+                    <div className="text-center font-bold text-blue-600 uppercase">XẢ DỮ LIỆU TỪ SÚNG QUÉT</div>
+                    <div className="text-sm text-center text-slate-600 mb-2">
+                      Click vào ô bên dưới và bóp cò súng để xả dữ liệu.<br/>
+                      <span className="text-xs text-slate-400 italic">(Hệ thống tự động ghép các Xe với Vị trí theo sau)</span>
+                    </div>
+                    <textarea 
+                      className="w-full h-64 p-4 rounded-xl border-2 border-blue-200 font-mono text-sm bg-slate-50 shadow-inner focus:outline-none focus:ring-4 focus:ring-blue-400 resize-none"
+                      placeholder="Dữ liệu xả từ súng sẽ hiện ở đây..."
+                      value={batchScanData}
+                      onChange={(e) => handleBatchDebounce(e.target.value)}
+                    />
+                    <div className="flex gap-2 mt-2">
+                      <button onClick={() => setScanMode('WORK_ORDER')} className="flex-1 bg-slate-200 py-3 rounded-xl font-bold text-slate-700 hover:bg-slate-300">QUAY LẠI</button>
+                      <button 
+                        disabled={!batchScanData.trim() || isProcessingBatch}
+                        onClick={() => processBatchScanData()}
+                        className="flex-[2] bg-green-600 text-white py-3 rounded-xl font-bold shadow-lg disabled:opacity-50 hover:bg-green-700 flex items-center justify-center gap-2"
+                      >
+                        {isProcessingBatch ? <Loader2 className="w-5 h-5 animate-spin" /> : '🚀 GHI NHẬN'}
+                      </button>
+                    </div>
+                  </div>
+                ) : scanMode === 'MAP_CART_TO_LOC' ? (
                   <div className="bg-white p-4 rounded-2xl shadow-inner border-2 border-slate-800 space-y-3">
                     {isScanningCart ? (
                       <div className="space-y-2">
